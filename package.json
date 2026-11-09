@@ -1,0 +1,20 @@
+{
+  "name": "fencemapper",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Conception et guidage GPS de clôtures temporaires (Kiwitech) pour les parcelles agricoles",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "vite build",
+    "preview": "vite preview --host",
+    "test": "node --test tests/*.test.js"
+  },
+  "dependencies": {
+    "@geoman-io/leaflet-geoman-free": "2.20.6",
+    "leaflet": "1.9.4"
+  },
+  "devDependencies": {
+    "vite": "8.3.7"
+  }
+}
