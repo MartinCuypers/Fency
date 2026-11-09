@@ -8,6 +8,8 @@ import { generateStrips } from './generate.js';
 import { prepareLine, locate, pointAt, postPositions, estimateMaterial } from './guidance.js';
 
 const $ = (id) => document.getElementById(id);
+// Pont vers l'application Android (RTK natif), absent dans le navigateur
+const android = window.FenceMapperAndroid || null;
 const STORE_KEY = 'fencemapper.plan.v1';
 const safe = (fn, dflt) => { try { return fn(); } catch { return dflt; } };
 
@@ -210,9 +212,11 @@ $('btn-export').addEventListener('click', () => {
   generated.eachLayer((l, i) => { /* lignes générées incluses pour les SIG */ });
   state.genLines.forEach((gl) => fc.features.push({ type: 'Feature', properties: { kind: 'generated', label: gl.label, length_m: Math.round(gl.length) }, geometry: { type: 'LineString', coordinates: gl.coords } }));
   fc.fencemapper = { version: 1, params: params(), genActive: state.genActive };
+  const name = `fencemapper-${new Date().toISOString().slice(0, 10)}.geojson`;
+  if (android) return android.saveFile(name, JSON.stringify(fc));
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(fc)], { type: 'application/geo+json' }));
-  a.download = `fencemapper-${new Date().toISOString().slice(0, 10)}.geojson`;
+  a.download = name;
   a.click(); URL.revokeObjectURL(a.href);
 });
 $('btn-import').addEventListener('click', () => $('file-import').click());
@@ -339,7 +343,10 @@ function onPos(pos) {
     if (c.heading != null && !Number.isNaN(c.heading) && (c.speed ?? 0) > 0.5) { arrow.textContent = '⬆️'; arrow.style.transform = `rotate(${c.heading}deg)`; }
     else { arrow.textContent = '🔵'; arrow.style.transform = ''; }
   }
-  $('st-acc').textContent = c.accuracy != null ? `±${fmt1(c.accuracy)} m` : '—';
+  const acc = c.accuracy == null ? '—' : c.accuracy < 1 ? `±${Math.round(c.accuracy * 100)} cm` : `±${fmt1(c.accuracy)} m`;
+  $('st-acc').textContent = acc;
+  $('st-acc').className = pos.quality ? `q-${pos.quality}` : '';
+  $('st-acc-label').textContent = pos.qualityLabel || 'précision GPS';
   if (!gps.centered) { map.setView(ll, Math.max(map.getZoom(), 19)); gps.centered = true; }
   else if (!map.getBounds().pad(-0.25).contains(ll)) map.panTo(ll);
   update();
@@ -347,8 +354,9 @@ function onPos(pos) {
 
 async function startGps() {
   if ($('sim').checked) { toast('Mode simulation : cliquez sur la carte pour placer le quad.'); setGpsButton(true); return; }
-  if (!navigator.geolocation) return toast('Géolocalisation indisponible sur cet appareil.');
   gps.centered = false;
+  if (android) { android.start(); setGpsButton(true); return; }
+  if (!navigator.geolocation) return toast('Géolocalisation indisponible sur cet appareil.');
   gps.watch = navigator.geolocation.watchPosition(onPos,
     (e) => toast(e.code === 1 ? 'Accès à la position refusé.' : 'Signal GPS indisponible.'),
     { enableHighAccuracy: true, maximumAge: 500, timeout: 20000 });
@@ -356,6 +364,7 @@ async function startGps() {
   setGpsButton(true);
 }
 function stopGps() {
+  if (android) android.stop();
   if (gps.watch != null) navigator.geolocation.clearWatch(gps.watch);
   gps.watch = null; safe(() => gps.wake?.release()); gps.wake = null;
   setGpsButton(false);
@@ -364,6 +373,23 @@ function setGpsButton(on) { gps.on = on; $('btn-gps').textContent = on ? '■ Ar
 $('btn-gps').addEventListener('click', () => (gps.on ? stopGps() : startGps()));
 map.on('click', (e) => { if (state.mode === 'field' && $('sim').checked) { gps.centered = true; onPos({ coords: { latitude: e.latlng.lat, longitude: e.latlng.lng, accuracy: 2, heading: null, speed: 0 } }); } });
 document.addEventListener('visibilitychange', async () => { if (!document.hidden && gps.on && gps.watch != null) safe(async () => { gps.wake = await navigator.wakeLock?.request('screen'); }); });
+
+// ---------------------------------------------------------------- RTK natif (application Android)
+window.fmNative = {
+  onPosition(p) {
+    if ($('sim').checked) return;
+    onPos({ quality: p.quality, qualityLabel: p.label,
+      coords: { latitude: p.lat, longitude: p.lon, accuracy: p.acc, heading: p.bearing, speed: p.speed } });
+  },
+  onStatus(s) {
+    const order = ['mode', 'rtk', 'ntrip', 'base', 'signaux', 'brutes', 'bt', 'gps'];
+    $('rtk-status').innerHTML = order.filter((k) => s[k]).map((k) => `<div>${s[k].replace(/</g, '&lt;')}</div>`).join('');
+  },
+};
+if (android) {
+  $('btn-rtk').hidden = false;
+  $('btn-rtk').addEventListener('click', () => { stopGps(); android.openSettings(); });
+}
 
 // ---------------------------------------------------------------- onglets
 function setMode(mode) {
@@ -390,6 +416,6 @@ if (saved) {
 refresh(false);
 window.__fm = { map, drawn, state, gps, register, refresh, onPos, setMode, L }; // utile pour les tests
 
-if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+if (import.meta.env.PROD && !android && 'serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js').catch(() => {});
 }

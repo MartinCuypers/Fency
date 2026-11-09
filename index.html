@@ -89,14 +89,16 @@
       <div class="row">
         <button id="btn-gps" class="primary">▶ Démarrer le GPS</button>
         <label class="check"><input id="sim" type="checkbox" /> Simuler (clic carte)</label>
+        <button id="btn-rtk" hidden>⚙ RTK</button>
       </div>
+      <div id="rtk-status" class="info rtk-status"></div>
       <div id="guide" class="guide">
         <div id="steer" class="steer">—</div>
         <div id="steer-sub" class="steer-sub">Démarrez le GPS</div>
         <div class="stats">
           <div><span id="st-next">—</span><small>prochain piquet</small></div>
           <div><span id="st-left">—</span><small>reste sur la ligne</small></div>
-          <div><span id="st-acc">—</span><small>précision GPS</small></div>
+          <div><span id="st-acc">—</span><small id="st-acc-label">précision GPS</small></div>
         </div>
         <div class="row postrow">
           <button id="btn-post-prev">◀</button>

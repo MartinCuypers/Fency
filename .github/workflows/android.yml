@@ -1,0 +1,40 @@
+name: APK Android
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Interface web embarquée dans l'APK
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+      # Test de bout en bout du moteur RTK (RTKLIB + pont) sur PC
+      - name: Test du moteur RTK natif
+        run: |
+          git clone --depth 1 --branch b34k https://github.com/rtklibexplorer/RTKLIB /tmp/rtklib
+          cmake -S android/app/src/main/cpp -B /tmp/rtkbuild -DRTKLIB_DIR=/tmp/rtklib
+          cmake --build /tmp/rtkbuild -j4
+          cd /tmp/rtkbuild && ctest --output-on-failure
+
+      # APK (le SDK et le NDK Android sont préinstallés sur les runners GitHub)
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Tests unitaires et APK
+        working-directory: android
+        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fencemapper-apk
+          path: android/app/build/outputs/apk/debug/*.apk

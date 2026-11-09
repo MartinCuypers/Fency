@@ -15,6 +15,32 @@ Application web / smartphone (PWA installable) pour **concevoir et poser des cl�
 - Compteur de piquets posés, écran maintenu allumé, fonctionnement hors ligne pour les zones déjà affichées.
 - Mode « Simuler » (clic sur la carte) pour tester sans GPS.
 
+## Application Android avec correction RTK
+
+Le dossier `android/` contient une application Android (Kotlin, sans AndroidX) qui embarque
+l'interface web et lui fournit une position corrigée. Trois sources au choix (écran « ⚙ RTK ») :
+
+| Source | Principe | Précision attendue |
+|---|---|---|
+| RTK téléphone | mesures GNSS brutes d'Android + corrections NTRIP + RTKLIB (JNI) | 10 à 50 cm au mieux, si le téléphone fournit la phase |
+| Récepteur externe | NMEA d'un récepteur RTK Bluetooth (simpleRTK2B, Emlid Reach…), corrections NTRIP retransmises | 1 à 2 cm |
+| GPS standard | position Android | 2 à 5 m |
+
+**Chaîne RTK téléphone**
+1. `RawGnssSource` : `registerGnssMeasurementsCallback`, suivi complet (`setFullTracking`) à partir d'Android 12.
+2. `RawConverter` : conversion `GnssClock`/`GnssMeasurement` en pseudo-distance, phase (ADR/λ), Doppler, C/N0, saut de cycle ; GPS, Galileo, BeiDou, QZSS ; L1/E1, L5/E5a, B1I.
+3. `NtripClient` : NTRIP v1 et v2 (chunked), reconnexion, envoi de GGA, choix de la base la plus proche dans le sourcetable (Centipede par défaut).
+4. `cpp/fm_rtk.c` : RTKLIB demo5 (rtklibexplorer, tag b34k), mode cinématique, fix-and-hold, position de base issue des messages 1005/1006.
+5. L'écran « Diagnostic du téléphone » indique si la phase porteuse et la bi-fréquence sont disponibles.
+
+**Tests**
+- `android/app/src/test` : tests JVM (conversion des mesures, RTCM3/CRC-24Q, NMEA, NTRIP v1/v2, sourcetable).
+- `android/app/src/main/cpp/test/test_bridge.c` : test de bout en bout du moteur sur les données réelles de RTKLIB (deux stations GSI à 3 km). La base passe par un vrai flux RTCM3 MSM4, le mobile par l'API du pont. Résultat : 109 époques FIXES sur 120, écart horizontal maximal de 4,2 cm par rapport au post-traitement RTKLIB.
+
+**Obtenir l'APK** : chaque push sur `main` lance `.github/workflows/android.yml`, qui produit l'APK (onglet Actions, artefact `fencemapper-apk`). À installer sur le téléphone en autorisant les sources inconnues.
+
+**Compiler soi-même** : Android Studio (SDK 35, NDK, CMake 3.22) ; lancer d'abord `npm run build` à la racine, puis ouvrir `android/`.
+
 ## Développement
 
 ```bash
