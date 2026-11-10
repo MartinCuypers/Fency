@@ -1,6 +1,6 @@
 {
-  "name": "FenceMapper",
-  "short_name": "FenceMapper",
+  "name": "Fency",
+  "short_name": "Fency",
   "description": "Conception et guidage GPS de clôtures temporaires",
   "start_url": "./",
   "scope": "./",

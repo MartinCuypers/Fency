@@ -9,9 +9,11 @@ import { prepareLine, locate, pointAt, postPositions, estimateMaterial } from '.
 
 const $ = (id) => document.getElementById(id);
 // Pont vers l'application Android (RTK natif), absent dans le navigateur
-const android = window.FenceMapperAndroid || null;
-const STORE_KEY = 'fencemapper.plan.v1';
+const android = window.FencyAndroid || null;
+const STORE_KEY = 'fency.plan.v1';
 const safe = (fn, dflt) => { try { return fn(); } catch { return dflt; } };
+// reprise des données enregistrées sous l'ancien nom (FenceMapper)
+safe(() => { for (const k of ['plan.v1', 'basemap']) { const o = localStorage.getItem('fencemapper.' + k); if (o && !localStorage.getItem('fency.' + k)) localStorage.setItem('fency.' + k, o); } });
 
 // ---------------------------------------------------------------- carte
 const map = L.map('map', { zoomControl: true, maxZoom: 21 }).setView([46.6, 2.4], 6);
@@ -23,7 +25,7 @@ const basemaps = {
   esri: tile('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', 'Imagery © Esri'),
   osm: tile('https://tile.openstreetmap.org/{z}/{x}/{y}.png', '© OpenStreetMap'),
 };
-let currentBase = safe(() => localStorage.getItem('fencemapper.basemap'), null) || 'ign';
+let currentBase = safe(() => localStorage.getItem('fency.basemap'), null) || 'ign';
 if (!basemaps[currentBase]) currentBase = 'ign';
 basemaps[currentBase].addTo(map);
 $('basemap').value = currentBase;
@@ -31,7 +33,7 @@ $('basemap').addEventListener('change', (e) => {
   map.removeLayer(basemaps[currentBase]);
   currentBase = e.target.value;
   basemaps[currentBase].addTo(map);
-  safe(() => localStorage.setItem('fencemapper.basemap', currentBase));
+  safe(() => localStorage.setItem('fency.basemap', currentBase));
 });
 
 map.pm.setLang('fr');
@@ -211,8 +213,8 @@ $('btn-export').addEventListener('click', () => {
   const fc = drawn.toGeoJSON();
   generated.eachLayer((l, i) => { /* lignes générées incluses pour les SIG */ });
   state.genLines.forEach((gl) => fc.features.push({ type: 'Feature', properties: { kind: 'generated', label: gl.label, length_m: Math.round(gl.length) }, geometry: { type: 'LineString', coordinates: gl.coords } }));
-  fc.fencemapper = { version: 1, params: params(), genActive: state.genActive };
-  const name = `fencemapper-${new Date().toISOString().slice(0, 10)}.geojson`;
+  fc.fency = { version: 1, params: params(), genActive: state.genActive };
+  const name = `fency-${new Date().toISOString().slice(0, 10)}.geojson`;
   if (android) return android.saveFile(name, JSON.stringify(fc));
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(fc)], { type: 'application/geo+json' }));
@@ -226,8 +228,9 @@ $('file-import').addEventListener('change', async (e) => {
   try {
     const fc = JSON.parse(await file.text());
     const n = loadFeatures(fc);
-    if (fc.fencemapper?.params) applyParams(fc.fencemapper.params);
-    state.genActive = !!fc.fencemapper?.genActive;
+    const meta = fc.fency ?? fc.fencemapper; // « fencemapper » : anciens exports
+    if (meta?.params) applyParams(meta.params);
+    state.genActive = !!meta?.genActive;
     refresh();
     if (drawn.getLayers().length) map.fitBounds(drawn.getBounds(), { padding: [30, 30] });
     toast(`${n} élément(s) importé(s).`);

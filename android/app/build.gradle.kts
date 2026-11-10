@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "io.github.martincuypers.fencemapper"
+    namespace = "io.github.martincuypers.fency"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "io.github.martincuypers.fencemapper"
+        applicationId = "io.github.martincuypers.fency"
         minSdk = 24          // mesures GNSS brutes : Android 7+
         targetSdk = 35
         versionCode = 1

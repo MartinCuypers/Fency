@@ -1,6 +1,6 @@
 // Service worker : l'application et les tuiles déjà vues restent disponibles hors ligne (champs sans réseau).
-const APP = 'fencemapper-app-v1';
-const TILES = 'fencemapper-tiles-v1';
+const APP = 'fency-app-v1';
+const TILES = 'fency-tiles-v1';
 const MAX_TILES = 2500;
 
 self.addEventListener('install', () => self.skipWaiting());

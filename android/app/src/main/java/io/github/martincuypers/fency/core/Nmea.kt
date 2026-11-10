@@ -1,4 +1,4 @@
-package io.github.martincuypers.fencemapper.core
+package io.github.martincuypers.fency.core
 
 import java.util.Locale
 import kotlin.math.abs

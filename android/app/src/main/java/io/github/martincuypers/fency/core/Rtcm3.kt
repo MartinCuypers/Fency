@@ -1,4 +1,4 @@
-package io.github.martincuypers.fencemapper.core
+package io.github.martincuypers.fency.core
 
 /** Découpe un flux RTCM3 en trames valides (CRC-24Q) pour en suivre le contenu. */
 class Rtcm3Framer {

@@ -1,4 +1,4 @@
-# FenceMapper
+# Fency
 
 Application web / smartphone (PWA installable) pour **concevoir et poser des clôtures temporaires Kiwitech** dans les champs.
 
@@ -37,7 +37,7 @@ l'interface web et lui fournit une position corrigée. Trois sources au choix (�
 - `android/app/src/test` : tests JVM (conversion des mesures, RTCM3/CRC-24Q, NMEA, NTRIP v1/v2, sourcetable).
 - `android/app/src/main/cpp/test/test_bridge.c` : test de bout en bout du moteur sur les données réelles de RTKLIB (deux stations GSI à 3 km). La base passe par un vrai flux RTCM3 MSM4, le mobile par l'API du pont. Résultat : 109 époques FIXES sur 120, écart horizontal maximal de 4,2 cm par rapport au post-traitement RTKLIB.
 
-**Obtenir l'APK** : chaque push sur `main` lance `.github/workflows/android.yml`, qui produit l'APK (onglet Actions, artefact `fencemapper-apk`). À installer sur le téléphone en autorisant les sources inconnues.
+**Obtenir l'APK** : chaque push sur `main` lance `.github/workflows/android.yml`, qui produit l'APK (onglet Actions, artefact `fency-apk`). À installer sur le téléphone en autorisant les sources inconnues.
 
 **Compiler soi-même** : Android Studio (SDK 35, NDK, CMake 3.22) ; lancer d'abord `npm run build` à la racine, puis ouvrir `android/`.
 

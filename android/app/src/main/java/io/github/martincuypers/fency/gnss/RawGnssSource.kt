@@ -1,4 +1,4 @@
-package io.github.martincuypers.fencemapper.gnss
+package io.github.martincuypers.fency.gnss
 
 import android.annotation.SuppressLint
 import android.location.GnssClock
@@ -9,8 +9,8 @@ import android.location.LocationManager
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
-import io.github.martincuypers.fencemapper.core.RawClock
-import io.github.martincuypers.fencemapper.core.RawMeasurement
+import io.github.martincuypers.fency.core.RawClock
+import io.github.martincuypers.fency.core.RawMeasurement
 import java.util.concurrent.Executor
 
 /**

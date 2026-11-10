@@ -1,4 +1,4 @@
-package io.github.martincuypers.fencemapper.ui
+package io.github.martincuypers.fency.ui
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -15,10 +15,10 @@ import android.os.Handler
 import android.os.Looper
 import android.widget.ScrollView
 import android.widget.TextView
-import io.github.martincuypers.fencemapper.core.RawClock
-import io.github.martincuypers.fencemapper.core.RawConverter
-import io.github.martincuypers.fencemapper.core.RawMeasurement
-import io.github.martincuypers.fencemapper.gnss.RawGnssSource
+import io.github.martincuypers.fency.core.RawClock
+import io.github.martincuypers.fency.core.RawConverter
+import io.github.martincuypers.fency.core.RawMeasurement
+import io.github.martincuypers.fency.gnss.RawGnssSource
 import java.util.Locale
 
 /**

@@ -1,9 +1,9 @@
-/* Liaison JNI entre io.github.martincuypers.fencemapper.rtk.RtkNative et fm_rtk.c */
+/* Liaison JNI entre io.github.martincuypers.fency.rtk.RtkNative et fm_rtk.c */
 #include <jni.h>
 #include <stdlib.h>
 #include "fm_rtk.h"
 
-#define FN(name) Java_io_github_martincuypers_fencemapper_rtk_RtkNative_##name
+#define FN(name) Java_io_github_martincuypers_fency_rtk_RtkNative_##name
 
 JNIEXPORT jlong JNICALL FN(nativeNew)(JNIEnv *env, jclass cls, jdouble elmask, jdouble snrmask,
                                        jint armode, jboolean gal, jboolean bds, jboolean glo,

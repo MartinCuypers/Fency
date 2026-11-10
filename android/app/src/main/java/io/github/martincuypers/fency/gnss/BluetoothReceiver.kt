@@ -1,4 +1,4 @@
-package io.github.martincuypers.fencemapper.gnss
+package io.github.martincuypers.fency.gnss
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter

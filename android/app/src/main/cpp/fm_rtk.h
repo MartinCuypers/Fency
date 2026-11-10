@@ -1,4 +1,4 @@
-/* FenceMapper : moteur RTK (RTKLIB demo5) alimenté par les mesures brutes GNSS
+/* Fency : moteur RTK (RTKLIB demo5) alimenté par les mesures brutes GNSS
  * d'Android (mobile) et un flux RTCM3 NTRIP (base). Indépendant de JNI pour
  * pouvoir être testé sur PC. */
 #ifndef FM_RTK_H

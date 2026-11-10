@@ -1,6 +1,6 @@
-package io.github.martincuypers.fencemapper.rtk
+package io.github.martincuypers.fency.rtk
 
-import io.github.martincuypers.fencemapper.core.Epoch
+import io.github.martincuypers.fency.core.Epoch
 
 /** Moteur RTK natif (RTKLIB demo5 via JNI, voir src/main/cpp). Thread-safe. */
 class RtkNative(elmaskDeg: Double = 15.0, snrMask: Double = 0.0, armode: Int = ARMODE_FIX_AND_HOLD,

@@ -1,4 +1,4 @@
-package io.github.martincuypers.fencemapper.ui
+package io.github.martincuypers.fency.ui
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -17,12 +17,12 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
-import io.github.martincuypers.fencemapper.PositionEngine
-import io.github.martincuypers.fencemapper.Prefs
+import io.github.martincuypers.fency.PositionEngine
+import io.github.martincuypers.fency.Prefs
 import java.io.IOException
 
 /**
- * Héberge l'interface web de FenceMapper (copiée dans assets/www) et lui fournit
+ * Héberge l'interface web de Fency (copiée dans assets/www) et lui fournit
  * les positions RTK via window.fmNative.onPosition(...).
  */
 class MainActivity : Activity() {
@@ -46,7 +46,7 @@ class MainActivity : Activity() {
             javaScriptEnabled = true
             domStorageEnabled = true
         }
-        web.addJavascriptInterface(Bridge(), "FenceMapperAndroid")
+        web.addJavascriptInterface(Bridge(), "FencyAndroid")
         web.webViewClient = object : WebViewClient() {
             // Sert les fichiers de l'interface depuis assets/www sous une origine https
             override fun shouldInterceptRequest(view: WebView, req: WebResourceRequest): WebResourceResponse? {
@@ -125,7 +125,7 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Fonctions appelées depuis le JavaScript (window.FenceMapperAndroid). */
+    /** Fonctions appelées depuis le JavaScript (window.FencyAndroid). */
     inner class Bridge {
         @JavascriptInterface fun start() = runOnUiThread { startEngine() }
         @JavascriptInterface fun stop() = runOnUiThread { engine.stop() }

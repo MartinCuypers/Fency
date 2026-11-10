@@ -1,4 +1,4 @@
-package io.github.martincuypers.fencemapper.core
+package io.github.martincuypers.fency.core
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull

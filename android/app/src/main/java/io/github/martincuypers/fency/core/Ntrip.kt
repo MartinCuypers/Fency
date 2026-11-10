@@ -1,4 +1,4 @@
-package io.github.martincuypers.fencemapper.core
+package io.github.martincuypers.fency.core
 
 import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
@@ -150,7 +150,7 @@ class NtripClient(
             return "GET $path HTTP/1.0\r\n" +
                 "Host: ${cfg.host}\r\n" +
                 "Ntrip-Version: Ntrip/2.0\r\n" +
-                "User-Agent: NTRIP FenceMapper/1.0\r\n" +
+                "User-Agent: NTRIP Fency/1.0\r\n" +
                 (if (cfg.user.isNotEmpty()) "Authorization: Basic $auth\r\n" else "") +
                 "Connection: close\r\n\r\n"
         }

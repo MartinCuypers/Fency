@@ -1,4 +1,4 @@
-package io.github.martincuypers.fencemapper.ui
+package io.github.martincuypers.fency.ui
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -25,10 +25,10 @@ import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
-import io.github.martincuypers.fencemapper.Prefs
-import io.github.martincuypers.fencemapper.core.NtripClient
-import io.github.martincuypers.fencemapper.core.NtripConfig
-import io.github.martincuypers.fencemapper.core.Sourcetable
+import io.github.martincuypers.fency.Prefs
+import io.github.martincuypers.fency.core.NtripClient
+import io.github.martincuypers.fency.core.NtripConfig
+import io.github.martincuypers.fency.core.Sourcetable
 import java.util.Locale
 import kotlin.concurrent.thread
 

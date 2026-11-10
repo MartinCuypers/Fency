@@ -1,11 +1,11 @@
-package io.github.martincuypers.fencemapper
+package io.github.martincuypers.fency
 
 import android.content.Context
-import io.github.martincuypers.fencemapper.core.NtripConfig
+import io.github.martincuypers.fency.core.NtripConfig
 
 /** Réglages persistants. */
 class Prefs(ctx: Context) {
-    private val p = ctx.getSharedPreferences("fencemapper", Context.MODE_PRIVATE)
+    private val p = ctx.getSharedPreferences("fency", Context.MODE_PRIVATE)
 
     var mode: String
         get() = p.getString("mode", MODE_INTERNAL) ?: MODE_INTERNAL

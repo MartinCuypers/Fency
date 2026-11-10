@@ -1,4 +1,4 @@
-package io.github.martincuypers.fencemapper
+package io.github.martincuypers.fency
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothManager
@@ -9,15 +9,15 @@ import android.location.LocationManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import io.github.martincuypers.fencemapper.core.Nmea
-import io.github.martincuypers.fencemapper.core.NtripClient
-import io.github.martincuypers.fencemapper.core.Position
-import io.github.martincuypers.fencemapper.core.Quality
-import io.github.martincuypers.fencemapper.core.RawConverter
-import io.github.martincuypers.fencemapper.core.Rtcm3Framer
-import io.github.martincuypers.fencemapper.gnss.BluetoothReceiver
-import io.github.martincuypers.fencemapper.gnss.RawGnssSource
-import io.github.martincuypers.fencemapper.rtk.RtkNative
+import io.github.martincuypers.fency.core.Nmea
+import io.github.martincuypers.fency.core.NtripClient
+import io.github.martincuypers.fency.core.Position
+import io.github.martincuypers.fency.core.Quality
+import io.github.martincuypers.fency.core.RawConverter
+import io.github.martincuypers.fency.core.Rtcm3Framer
+import io.github.martincuypers.fency.gnss.BluetoothReceiver
+import io.github.martincuypers.fency.gnss.RawGnssSource
+import io.github.martincuypers.fency.rtk.RtkNative
 import java.util.Locale
 import kotlin.math.hypot
 
