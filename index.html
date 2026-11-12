@@ -24,15 +24,20 @@
   <section id="panel-design" class="panel">
     <div class="handle" id="design-handle"></div>
     <div class="panel-body">
-      <h3>1. Dessiner</h3>
-      <p class="hint">Utilisez les outils à gauche de la carte : <b>polygone</b> pour le champ, <b>ligne</b> pour une clôture. Cliquez un champ pour le sélectionner.</p>
+      <h3>1. Parcelles</h3>
       <div class="row">
         <button id="btn-locate">📍 Ma position</button>
-        <select id="basemap">
-          <option value="ign">Satellite IGN</option>
-          <option value="esri">Satellite Esri</option>
-          <option value="osm">Plan OSM</option>
-        </select>
+        <select id="basemap" title="Fond de carte"></select>
+      </div>
+      <label>Couche de référence (cliquez un polygone pour en faire une parcelle)
+        <select id="ref-layer"><option value="">Aucune</option></select>
+      </label>
+      <div id="ref-status" class="hint"></div>
+      <p class="hint">Ou dessinez avec les outils à gauche de la carte : <b>polygone</b> pour une parcelle, <b>ligne</b> pour une clôture.</p>
+      <div class="row">
+        <label class="check"><input id="multi" type="checkbox" /> Sélection multiple</label>
+        <button id="btn-merge" disabled>Fusionner</button>
+        <button id="btn-cut">Couper</button>
       </div>
       <div id="field-info" class="info">Aucun champ dessiné.</div>
 

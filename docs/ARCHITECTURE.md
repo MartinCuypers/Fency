@@ -81,3 +81,28 @@ sert de démo ou d'offre gratuite, la version en ligne d'offre collaborative.
 - `tests/session.test.js` : regroupement des écritures, changement de plan, deux clients sur un même plan.
 
 L'adaptateur Firestore et les règles n'ont pas encore été exécutés contre un vrai projet Firebase.
+
+# Couches cartographiques
+
+Les fonds de carte et les couches de référence sont décrits dans `src/layers.js`, une ligne par couche,
+au format `Clé=valeur;…` :
+
+```
+Type=Sentinel;BaseUrl="https://services.sentinel-hub.com/ogc/wmts/<instance>";LayerName="SAVI";ImageFormat="image/jpeg"
+Type=Wfs;BaseUrl="https://data.geopf.fr/wfs";FeatureTypeName="RPG.2018:parcelles_graphiques"
+Type=Wmts;BaseUrl="…";LayerName="…";Style=normal;TileMatrixSet=PM;ImageFormat="image/jpeg"
+Type=Xyz;Url="https://…/{z}/{x}/{y}.png"
+```
+
+Clés facultatives : `Id`, `Label`, `Attribution`, `MaxNativeZoom`, `MinZoom` ; pour Sentinel : `TileMatrixSet`
+(défaut `PopularWebMercator256`), `Style`, `Time` (`2026-05-01/2026-05-31`), `MaxCloudCover`.
+On peut en ajouter sans toucher au code avec la variable de compilation `VITE_FENCY_LAYERS`
+(couches séparées par `|`).
+
+- Les couches `Wfs` apparaissent dans « Couche de référence ». Elles sont chargées pour la zone affichée à
+  partir du zoom 14 (1 500 objets au plus). L'ordre des axes (latitude/longitude) attendu par le serveur est
+  détecté automatiquement, à la requête comme à la réponse.
+- `src/parcels.js` (chargé à la demande) contient la fusion et la découpe. Les trous des polygones sont ignorés.
+
+Non vérifié contre les services réels (injoignables depuis l'environnement de développement) : les paramètres
+WMTS de Sentinel Hub et les réponses du WFS de la Géoplateforme, dont la présence des en-têtes CORS.

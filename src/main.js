@@ -9,6 +9,7 @@ import { prepareLine, locate, pointAt, postPositions, estimateMaterial } from '.
 import { createBackend, readConfig } from './backends/index.js';
 import { uid } from './backends/types.js';
 import { createSession } from './session.js';
+import { loadLayerSpecs, tileUrl, tileOptions, wfsUrl, normalizeWfs, outerRingAt, BBOX_VARIANTS } from './layers.js';
 
 const $ = (id) => document.getElementById(id);
 // Pont vers l'application Android (RTK natif), absent dans le navigateur
@@ -21,15 +22,12 @@ safe(() => { for (const k of ['plan.v1', 'basemap']) { const o = localStorage.ge
 // ---------------------------------------------------------------- carte
 const map = L.map('map', { zoomControl: true, maxZoom: 21 }).setView([46.6, 2.4], 6);
 
-const tile = (url, attribution, extra = {}) =>
-  L.tileLayer(url, { attribution, maxZoom: 21, maxNativeZoom: 19, crossOrigin: true, ...extra });
-const basemaps = {
-  ign: tile('https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&FORMAT=image/jpeg&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}', '© IGN'),
-  esri: tile('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', 'Imagery © Esri'),
-  osm: tile('https://tile.openstreetmap.org/{z}/{x}/{y}.png', '© OpenStreetMap'),
-};
+const layerSpecs = loadLayerSpecs(import.meta.env.VITE_FENCY_LAYERS);
+const basemaps = Object.fromEntries(layerSpecs.basemaps.map((spec) =>
+  [spec.id, L.tileLayer(tileUrl(spec), { maxZoom: 21, crossOrigin: true, ...tileOptions(spec) })]));
+$('basemap').innerHTML = layerSpecs.basemaps.map((b) => `<option value="${b.id}">${b.label}</option>`).join('');
 let currentBase = safe(() => localStorage.getItem('fency.basemap'), null) || 'ign';
-if (!basemaps[currentBase]) currentBase = 'ign';
+if (!basemaps[currentBase]) currentBase = layerSpecs.basemaps[0].id;
 basemaps[currentBase].addTo(map);
 $('basemap').value = currentBase;
 $('basemap').addEventListener('change', (e) => {
@@ -51,11 +49,13 @@ map.pm.setGlobalOptions({ snappable: true, snapDistance: 15 });
 const drawn = L.featureGroup().addTo(map);      // dessins de l'utilisateur (champs, clôtures)
 const generated = L.featureGroup().addTo(map);  // clôtures générées (recalculées)
 const guideLayer = L.featureGroup().addTo(map); // ligne cible, piquets, position
+map.createPane('reference').style.zIndex = 350;  // couche de référence : sous les dessins
 
 // ---------------------------------------------------------------- état
 const state = {
   mode: 'design',
   selected: null,           // champ sélectionné
+  multi: new Set(),         // champs cochés pour une fusion
   genActive: false,
   genLines: [],             // clôtures générées {coords,length,label}
   strips: [],
@@ -79,12 +79,16 @@ const currentField = () => (state.selected && drawn.hasLayer(state.selected) ? s
 const STYLE = {
   field: { color: '#ffeb3b', weight: 3, fillColor: '#ffeb3b', fillOpacity: 0.08 },
   fieldSel: { color: '#ff9800', weight: 4, fillColor: '#ff9800', fillOpacity: 0.12 },
+  fieldMulti: { color: '#e040fb', weight: 4, fillColor: '#e040fb', fillOpacity: 0.2 },
   line: { color: '#00e5ff', weight: 4 },
 };
 
 function styleDrawn() {
   const cur = currentField();
-  drawn.eachLayer((l) => l.setStyle(isField(l) ? (l === cur ? STYLE.fieldSel : STYLE.field) : STYLE.line));
+  drawn.eachLayer((l) => l.setStyle(!isField(l) ? STYLE.line : state.multi.has(l) ? STYLE.fieldMulti : l === cur ? STYLE.fieldSel : STYLE.field));
+  const n = [...state.multi].filter((l) => drawn.hasLayer(l)).length;
+  $('btn-merge').disabled = n < 2;
+  $('btn-merge').textContent = n >= 2 ? `Fusionner (${n})` : 'Fusionner';
 }
 
 // Chaque élément dessiné porte un identifiant stable : c'est l'unité d'enregistrement
@@ -100,21 +104,33 @@ function register(layer, id = uid()) {
   layer.feature = { type: 'Feature', properties: { id, kind }, geometry: null };
   byId.set(id, layer);
   if (!drawn.hasLayer(layer)) drawn.addLayer(layer);
-  layer.on('click', () => {
+  layer.on('click', (e) => {
     if (state.mode === 'field' && kind === 'line') return pickLine(`u:${L.stamp(layer)}`);
-    if (kind === 'field') { state.selected = layer; styleDrawn(); refresh(false); }
+    if (kind !== 'field') return;
+    const o = e.originalEvent;
+    if (state.mode === 'design' && ($('multi').checked || o?.ctrlKey || o?.shiftKey || o?.metaKey)) {
+      // sélection multiple (case cochée, ou Ctrl/Maj + clic) : pour fusionner
+      if (state.multi.has(layer)) state.multi.delete(layer); else state.multi.add(layer);
+    } else { state.multi.clear(); state.selected = layer; }
+    styleDrawn(); refresh(false);
   });
   ['pm:edit', 'pm:dragend', 'pm:vertexadded', 'pm:vertexremoved'].forEach((ev) => layer.on(ev, () => { syncLayer(layer); refresh(); }));
   styleDrawn();
 }
 
 map.on('pm:create', (e) => {
+  if (cutting) { // la ligne tracée est un trait de coupe, pas une clôture
+    const target = cutting, line = ringOf(e.layer);
+    cutting = null; e.layer.remove();
+    return cutField(target, line);
+  }
   register(e.layer);
   syncLayer(e.layer);
   if (isField(e.layer)) state.selected = e.layer;
   refresh();
 });
 drawn.on('layerremove', (e) => {
+  state.multi.delete(e.layer);
   const id = e.layer.feature?.properties?.id;
   if (id && byId.get(id) === e.layer) {
     byId.delete(id);
@@ -122,6 +138,114 @@ drawn.on('layerremove', (e) => {
   }
   setTimeout(() => refresh(), 0);
 });
+
+// ---------------------------------------------------------------- parcelles : créer, fusionner, couper
+/** Ajoute une parcelle à partir d'un contour [[lon, lat], …] et l'enregistre. */
+function addField(ring) {
+  const layer = L.polygon(ring.map(([lng, lat]) => [lat, lng])).addTo(map);
+  register(layer); syncLayer(layer);
+  return layer;
+}
+
+$('btn-merge').addEventListener('click', async () => {
+  const layers = [...state.multi].filter((l) => drawn.hasLayer(l));
+  if (layers.length < 2) return;
+  const { mergeParcels } = await import('./parcels.js');
+  const res = mergeParcels(layers.map(ringOf));
+  if (!res) return toast('Fusion impossible : ces parcelles sont séparées de plus de 5 m.');
+  layers.forEach((l) => drawn.removeLayer(l));
+  state.multi.clear(); $('multi').checked = false;
+  state.selected = addField(res.ring);
+  refresh();
+  toast(res.bridged ? 'Parcelles fusionnées (espace entre elles comblé).' : 'Parcelles fusionnées.');
+});
+
+let cutting = null; // parcelle en cours de découpe (on attend le tracé du trait de coupe)
+$('btn-cut').addEventListener('click', () => {
+  const field = currentField();
+  if (!field) return toast('Sélectionnez d\'abord une parcelle.');
+  state.selected = field; styleDrawn();
+  cutting = field;
+  map.pm.enableDraw('Line', { snappable: true });
+  toast('Tracez le trait de coupe à travers la parcelle, puis terminez sur le dernier point.');
+});
+map.on('pm:drawend', () => setTimeout(() => { cutting = null; }, 0)); // tracé abandonné
+
+async function cutField(field, line) {
+  const { splitParcel } = await import('./parcels.js');
+  const pieces = splitParcel(ringOf(field), line);
+  if (!pieces.length) return toast('Le trait doit traverser la parcelle de part en part.');
+  drawn.removeLayer(field);
+  const layers = pieces.map(addField);
+  state.selected = layers[0];
+  refresh();
+  toast(`Parcelle coupée en ${pieces.length}.`);
+}
+
+// ---------------------------------------------------------------- couche de référence (WFS)
+const REF_MIN_ZOOM = 14;
+const ref = { spec: null, variant: null, ctrl: null, timer: null };
+const refLayer = L.geoJSON(null, {
+  pane: 'reference', pmIgnore: true,
+  style: { color: '#ffffff', weight: 1.5, dashArray: '4 3', fillColor: '#ffffff', fillOpacity: 0.06 },
+  onEachFeature: (feature, layer) => {
+    layer.on('mouseover', () => layer.setStyle({ weight: 3, fillOpacity: 0.25 }));
+    layer.on('mouseout', () => refLayer.resetStyle(layer));
+    layer.on('click', (e) => {
+      if (state.mode !== 'design' || cutting || map.pm.globalDrawModeEnabled() || map.pm.globalRemovalModeEnabled()) return;
+      L.DomEvent.stopPropagation(e);
+      const field = addField(outerRingAt(feature, [e.latlng.lng, e.latlng.lat]));
+      state.multi.clear(); state.selected = field;
+      refresh();
+      const crop = feature.properties?.code_cultu ? ` (culture ${feature.properties.code_cultu})` : '';
+      toast(`Parcelle créée : ${formatArea(areaLL(ringOf(field)))}${crop}.`);
+    });
+  },
+}).addTo(map);
+$('ref-layer').innerHTML += layerSpecs.reference.map((r) => `<option value="${r.id}">${r.label}</option>`).join('');
+
+async function loadReference() {
+  ref.ctrl?.abort();
+  const status = (t) => { $('ref-status').textContent = t; };
+  if (!ref.spec) { refLayer.clearLayers(); return status(''); }
+  if (map.getZoom() < REF_MIN_ZOOM) { refLayer.clearLayers(); return status('Zoomez pour afficher cette couche.'); }
+  const b = map.getBounds().pad(0.15);
+  const bounds = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+  const ctrl = ref.ctrl = new AbortController();
+  status('Chargement…');
+  let feats = [], error = null;
+  // l'ordre des axes attendu dépend du serveur : on retient la première variante qui répond
+  for (const variant of ref.variant ? [ref.variant] : BBOX_VARIANTS) {
+    try {
+      const res = await fetch(wfsUrl(ref.spec, bounds, { variant }), { signal: ctrl.signal });
+      if (!res.ok) { error = `erreur ${res.status}`; continue; }
+      feats = normalizeWfs(await res.json(), bounds);
+      error = null;
+      if (feats.length) { ref.variant = variant; break; }
+    } catch (e) {
+      if (e.name === 'AbortError') return;
+      error = navigator.onLine === false ? 'pas de réseau' : 'réponse illisible ou service injoignable';
+    }
+  }
+  if (ctrl.signal.aborted) return;
+  refLayer.clearLayers();
+  if (error && !feats.length) return status(`Couche indisponible (${error}).`);
+  refLayer.addData({ type: 'FeatureCollection', features: feats });
+  status(feats.length ? `${feats.length} polygone${feats.length > 1 ? 's' : ''} affiché${feats.length > 1 ? 's' : ''}${feats.length >= 1500 ? ' (limite atteinte : zoomez)' : ''}.` : 'Aucun polygone dans cette zone.');
+}
+const scheduleReference = () => { clearTimeout(ref.timer); ref.timer = setTimeout(loadReference, 350); };
+map.on('moveend', scheduleReference);
+$('ref-layer').addEventListener('change', (e) => {
+  ref.spec = layerSpecs.reference.find((r) => r.id === e.target.value) ?? null;
+  ref.variant = null;
+  safe(() => localStorage.setItem('fency.refLayer', ref.spec?.id ?? ''));
+  loadReference();
+});
+{ // couche choisie la dernière fois
+  const saved = safe(() => localStorage.getItem('fency.refLayer'), '');
+  ref.spec = layerSpecs.reference.find((r) => r.id === saved) ?? null;
+  if (ref.spec) { $('ref-layer').value = ref.spec.id; scheduleReference(); }
+}
 
 // ---------------------------------------------------------------- génération
 const params = () => ({
@@ -615,7 +739,7 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) sessi
 
 refresh(false);
 const ready = boot().catch((e) => { console.error(e); toast('Erreur au démarrage du stockage.'); });
-window.__fm = { map, drawn, state, gps, register, refresh, onPos, setMode, L, ready, syncLayer, get session() { return session; }, get backend() { return backend; } }; // utile pour les tests
+window.__fm = { map, drawn, refLayer, state, gps, register, refresh, onPos, setMode, L, ready, syncLayer, get session() { return session; }, get backend() { return backend; } }; // utile pour les tests
 
 if (import.meta.env.PROD && !android && 'serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js').catch(() => {});

@@ -5,7 +5,9 @@ Application web / smartphone (PWA installable) pour **concevoir et poser des cl�
 ## Fonctions
 
 **Conception (sur ordinateur ou téléphone)**
-- Carte satellite (IGN, Esri) ou plan, dessin du champ (polygone/rectangle) et de clôtures (lignes), accrochage aux sommets.
+- Fonds de carte : satellite IGN, Esri, plan OSM, Sentinel-2 (indice SAVI, via Sentinel Hub).
+- Parcelles : dessin (polygone/rectangle), ou création en cliquant un polygone d'une couche de référence WFS (RPG de l'IGN) ; fusion de parcelles voisines (les espaces de moins de 5 m sont comblés) et découpe par un trait.
+- Clôtures dessinées à la main (lignes), accrochage aux sommets.
 - Génération de clôtures de subdivision parallèles, par largeur de bande (m) ou par surface (ares), pour tout type de forme de champ ; direction réglable ou alignée sur le plus long côté ; choix du côté de départ ; clôture du périmètre en option.
 - Surface de chaque bande, longueur totale, nombre de piquets et longueur de fil estimés.
 - Plusieurs plans nommés, enregistrés automatiquement ; export / import GeoJSON.
