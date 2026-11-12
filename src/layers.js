@@ -139,6 +139,34 @@ export function outerRingAt(feature, [lon, lat]) {
 export const capabilitiesUrl = (baseUrl) =>
   baseUrl + (baseUrl.includes('?') ? '&' : '?') + 'SERVICE=WFS&VERSION=2.0.0&REQUEST=GetCapabilities';
 
+/**
+ * Catalogues thématiques publiés à côté d'un serveur : bien plus légers que son catalogue
+ * complet, ils sont lus en premier. (Géoplateforme IGN : thème agriculture, dont le RPG.)
+ */
+export const THEMATIC_CATALOGS = {
+  'https://data.geopf.fr/wfs': ['https://data.geopf.fr/annexes/ressources/wfs/agriculture.xml'],
+};
+
+/**
+ * Où lire le catalogue pour l'adresse saisie : soit un service WFS (catalogues thématiques
+ * connus, puis GetCapabilities complet), soit directement un fichier de catalogue « .xml »
+ * (l'adresse du service est alors lue dans le fichier).
+ * @returns {{sources: string[], full: string|null, baseUrl: string|null}}
+ */
+export function catalogPlan(input) {
+  const url = input.trim();
+  if (/\.xml(\?|#|$)/i.test(url)) return { sources: [url], full: null, baseUrl: null };
+  const base = url.replace(/[?&]+$/, '');
+  return { sources: THEMATIC_CATALOGS[base.replace(/\/$/, '')] ?? [], full: capabilitiesUrl(base), baseUrl: base };
+}
+
+/** Adresse du service (opération GetFeature) déclarée dans un document GetCapabilities. */
+export function parseWfsEndpoint(xml) {
+  const op = xml.match(/<(?:\w+:)?Operation[^>]*name="GetFeature"[^>]*>([\s\S]*?)<\/(?:\w+:)?Operation>/);
+  const href = (op ? op[1] : xml).match(/<(?:\w+:)?Get[^>]*?(?:xlink:)?href="([^"]+)"/);
+  return href ? href[1].replace(/&amp;/g, '&').replace(/[?&]+$/, '') : null;
+}
+
 /** Extrait les couches (nom technique, titre) d'un document GetCapabilities WFS. */
 export function parseWfsCapabilities(xml) {
   const text = (block, tag) => {

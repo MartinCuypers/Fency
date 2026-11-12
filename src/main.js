@@ -9,7 +9,7 @@ import { prepareLine, locate, pointAt, postPositions, estimateMaterial } from '.
 import { createBackend, readConfig } from './backends/index.js';
 import { uid } from './backends/types.js';
 import { createSession } from './session.js';
-import { loadLayerSpecs, tileUrl, tileOptions, wfsUrl, normalizeWfs, outerRingAt, BBOX_VARIANTS, capabilitiesUrl, parseWfsCapabilities, searchCatalog, layerLabel, wfsSpecLine } from './layers.js';
+import { loadLayerSpecs, tileUrl, tileOptions, wfsUrl, normalizeWfs, outerRingAt, BBOX_VARIANTS, catalogPlan, parseWfsEndpoint, parseWfsCapabilities, searchCatalog, layerLabel, wfsSpecLine } from './layers.js';
 
 const $ = (id) => document.getElementById(id);
 // Pont vers l'application Android (RTK natif), absent dans le navigateur
@@ -282,23 +282,45 @@ function renderMyLayers() {
   });
 }
 async function searchLayers() {
-  const baseUrl = $('cat-url').value.trim(), status = (t) => { $('cat-status').textContent = t; };
-  if (!baseUrl) return;
+  const input = $('cat-url').value.trim(), status = (t) => { $('cat-status').textContent = t; };
+  if (!input) return;
   $('cat-results').innerHTML = '';
-  if (!catalogs.has(baseUrl)) {
-    status('Lecture du catalogue du serveur (peut prendre quelques secondes)…');
-    try {
-      const res = await fetch(capabilitiesUrl(baseUrl));
-      if (!res.ok) throw new Error(`erreur ${res.status}`);
-      const list = parseWfsCapabilities(await res.text());
-      if (!list.length) throw new Error('aucune couche dans la réponse');
-      catalogs.set(baseUrl, list);
-    } catch (e) {
-      return status(`Catalogue indisponible (${e.message === 'Failed to fetch' ? 'serveur injoignable' : e.message}). Vous pouvez saisir le nom de la couche ci-dessous.`);
+  const plan = catalogPlan(input);
+  // { entries, baseUrl, full } : `full` devient vrai une fois le catalogue complet du serveur lu
+  const cat = catalogs.get(input) ?? { entries: [], baseUrl: plan.baseUrl, full: false };
+  const read = async (url) => {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`erreur ${res.status}`);
+    const xml = await res.text(), list = parseWfsCapabilities(xml);
+    if (!list.length) throw new Error('aucune couche dans la réponse');
+    cat.baseUrl ??= parseWfsEndpoint(xml);
+    const known = new Set(cat.entries.map((c) => c.name));
+    cat.entries.push(...list.filter((c) => !known.has(c.name)));
+  };
+  const readFull = async () => { if (plan.full && !cat.full) { await read(plan.full); cat.full = true; } };
+  let found = [];
+  try {
+    if (!catalogs.has(input)) {
+      status('Lecture du catalogue (peut prendre quelques secondes)…');
+      // catalogues thématiques d'abord (légers) ; le catalogue complet en secours
+      let ok = false;
+      for (const url of plan.sources) { try { await read(url); ok = true; } catch { /* source suivante */ } }
+      if (!ok) await readFull();
+      if (!cat.entries.length) throw new Error('aucune couche dans la réponse');
+      if (!cat.baseUrl) throw new Error('adresse du service WFS introuvable dans ce catalogue');
+      catalogs.set(input, cat);
     }
+    found = searchCatalog(cat.entries, $('cat-query').value);
+    if (!found.length && plan.full && !cat.full) { // absent du catalogue thématique : chercher dans tout le serveur
+      status('Recherche dans le catalogue complet du serveur…');
+      await readFull();
+      found = searchCatalog(cat.entries, $('cat-query').value);
+    }
+  } catch (e) {
+    if (!found.length) return status(`Catalogue indisponible (${e.message === 'Failed to fetch' ? 'serveur injoignable' : e.message}). Vous pouvez saisir le nom de la couche ci-dessous.`);
   }
-  const found = searchCatalog(catalogs.get(baseUrl), $('cat-query').value);
-  status(`${found.length} couche${found.length > 1 ? 's' : ''} trouvée${found.length > 1 ? 's' : ''} sur ${catalogs.get(baseUrl).length}${found.length > 80 ? ' (80 premières affichées : précisez la recherche)' : ''}.`);
+  const baseUrl = cat.baseUrl;
+  status(`${found.length} couche${found.length > 1 ? 's' : ''} trouvée${found.length > 1 ? 's' : ''} sur ${cat.entries.length}${found.length > 80 ? ' (80 premières affichées : précisez la recherche)' : ''}.`);
   for (const entry of found.slice(0, 80)) {
     const row = document.createElement('div'); row.className = 'cat-item';
     row.innerHTML = `<div><b>${escapeHtml(layerLabel(entry))}</b><small>${escapeHtml(entry.name)}</small></div><button>Ajouter</button>`;
@@ -311,8 +333,11 @@ $('btn-layers-close').addEventListener('click', () => $('dlg-layers').close());
 $('btn-cat-search').addEventListener('click', searchLayers);
 $('cat-query').addEventListener('keydown', (e) => { if (e.key === 'Enter') searchLayers(); });
 $('btn-cat-manual').addEventListener('click', () => {
-  const name = $('cat-manual').value.trim(), baseUrl = $('cat-url').value.trim();
-  if (name && baseUrl) addCatalogLayer(baseUrl, { name, title: '' });
+  const name = $('cat-manual').value.trim(), input = $('cat-url').value.trim();
+  const baseUrl = catalogs.get(input)?.baseUrl ?? catalogPlan(input).baseUrl;
+  if (!name) return;
+  if (!baseUrl) return toast('Indiquez l\'adresse du service WFS (et non celle d\'un fichier de catalogue).');
+  addCatalogLayer(baseUrl, { name, title: '' });
 });
 { // couche choisie la dernière fois
   const saved = safe(() => localStorage.getItem('fency.refLayer'), '');

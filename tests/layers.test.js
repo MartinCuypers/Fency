@@ -1,6 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseLayerSpec, loadLayerSpecs, tileUrl, tileOptions, wfsUrl, normalizeWfs, outerRingAt, parseWfsCapabilities, searchCatalog, layerLabel, wfsSpecLine, capabilitiesUrl } from '../src/layers.js';
+import { parseLayerSpec, loadLayerSpecs, tileUrl, tileOptions, wfsUrl, normalizeWfs, outerRingAt, parseWfsCapabilities, searchCatalog, layerLabel, wfsSpecLine, capabilitiesUrl, catalogPlan, parseWfsEndpoint } from '../src/layers.js';
+
+test('catalogue : sources à lire selon l\'adresse saisie, adresse du service lue dans le fichier', () => {
+  const geopf = catalogPlan(' https://data.geopf.fr/wfs ');
+  assert.deepEqual(geopf.sources, ['https://data.geopf.fr/annexes/ressources/wfs/agriculture.xml']);
+  assert.equal(geopf.full, 'https://data.geopf.fr/wfs?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetCapabilities');
+  assert.equal(geopf.baseUrl, 'https://data.geopf.fr/wfs');
+  assert.deepEqual(catalogPlan('https://autre.exemple/wfs'), { sources: [], full: 'https://autre.exemple/wfs?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetCapabilities', baseUrl: 'https://autre.exemple/wfs' });
+  assert.deepEqual(catalogPlan('https://data.geopf.fr/annexes/ressources/wfs/agriculture.xml'), { sources: ['https://data.geopf.fr/annexes/ressources/wfs/agriculture.xml'], full: null, baseUrl: null });
+  const xml = `<wfs:WFS_Capabilities><ows:OperationsMetadata>
+    <ows:Operation name="GetCapabilities"><ows:DCP><ows:HTTP><ows:Get xlink:href="https://autre/caps?"/></ows:HTTP></ows:DCP></ows:Operation>
+    <ows:Operation name="GetFeature"><ows:DCP><ows:HTTP><ows:Get xlink:href="https://data.geopf.fr/wfs?"/><ows:Post xlink:href="https://data.geopf.fr/wfs"/></ows:HTTP></ows:DCP></ows:Operation>
+  </ows:OperationsMetadata></wfs:WFS_Capabilities>`;
+  assert.equal(parseWfsEndpoint(xml), 'https://data.geopf.fr/wfs');
+  assert.equal(parseWfsEndpoint('<a><Get href="https://x/wfs?map=a&amp;b=1&amp;"/></a>'), 'https://x/wfs?map=a&b=1');
+  assert.equal(parseWfsEndpoint('<rien/>'), null);
+});
 import { mergeParcels, splitParcel } from '../src/parcels.js';
 import { makeProjection, areaLL } from '../src/geo.js';
 
