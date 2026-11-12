@@ -30,7 +30,7 @@
         <select id="basemap" title="Fond de carte"></select>
       </div>
       <label>Couche de référence (cliquez un polygone pour en faire une parcelle)
-        <select id="ref-layer"><option value="">Aucune</option></select>
+        <span class="row nowrap"><select id="ref-layer"></select><button id="btn-layers" title="Ajouter une couche du serveur">＋ Couches</button></span>
       </label>
       <div id="ref-status" class="hint"></div>
       <p class="hint">Ou dessinez avec les outils à gauche de la carte : <b>polygone</b> pour une parcelle, <b>ligne</b> pour une clôture.</p>
@@ -129,6 +129,19 @@
       <button id="btn-plan-join" hidden>Rejoindre…</button>
       <button id="btn-plans-close">Fermer</button>
     </div>
+  </dialog>
+
+  <dialog id="dlg-layers">
+    <h3>Couches de référence</h3>
+    <p class="hint">Cherchez dans le catalogue d'un serveur WFS, par exemple les millésimes du RPG ou le cadastre.</p>
+    <label>Serveur WFS<input id="cat-url" type="url" value="https://data.geopf.fr/wfs" /></label>
+    <span class="row nowrap"><input id="cat-query" type="search" value="RPG parcelles" placeholder="mots à chercher" /><button id="btn-cat-search" class="primary">Chercher</button></span>
+    <div id="cat-status" class="hint"></div>
+    <div id="cat-results"></div>
+    <label>Ou nom technique de la couche<span class="row nowrap"><input id="cat-manual" type="text" placeholder="RPG.2023:parcelles_graphiques" /><button id="btn-cat-manual">Ajouter</button></span></label>
+    <h3>Mes couches ajoutées</h3>
+    <div id="cat-mine"></div>
+    <div class="row"><button id="btn-layers-close">Fermer</button></div>
   </dialog>
 
   <dialog id="dlg-auth">

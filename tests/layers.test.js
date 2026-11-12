@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseLayerSpec, loadLayerSpecs, tileUrl, tileOptions, wfsUrl, normalizeWfs, outerRingAt } from '../src/layers.js';
+import { parseLayerSpec, loadLayerSpecs, tileUrl, tileOptions, wfsUrl, normalizeWfs, outerRingAt, parseWfsCapabilities, searchCatalog, layerLabel, wfsSpecLine, capabilitiesUrl } from '../src/layers.js';
 import { mergeParcels, splitParcel } from '../src/parcels.js';
 import { makeProjection, areaLL } from '../src/geo.js';
 
@@ -148,4 +148,35 @@ test('découpe : robustesse sur 300 traits aléatoires', () => {
     assert.equal(pieces.length, 2, `cas ${i}`);
     assert.ok(Math.abs(pieces.reduce((s, r) => s + area(r), 0) - w * h) < 1 + w * h * 1e-4, `cas ${i} : surface conservée`);
   }
+});
+
+test('catalogue WFS : lecture du GetCapabilities, recherche, ajout', () => {
+  const xml = `<?xml version="1.0"?><wfs:WFS_Capabilities xmlns:wfs="http://www.opengis.net/wfs/2.0"><FeatureTypeList>
+    <FeatureType xmlns:RPG.2018="x"><Name>RPG.2018:parcelles_graphiques</Name><Title>RPG 2018 : parcelles</Title><DefaultCRS>urn:ogc:def:crs:EPSG::4326</DefaultCRS></FeatureType>
+    <wfs:FeatureType><wfs:Name>RPG.2023:parcelles_graphiques</wfs:Name><wfs:Title><![CDATA[Registre parcellaire 2023 & co]]></wfs:Title></wfs:FeatureType>
+    <FeatureType><Name>RPG.2023:ilots_anonymes</Name><Title>Îlots 2023</Title></FeatureType>
+    <FeatureType><Name>RPG.LATEST:parcelles_graphiques</Name><Title>RPG dernier</Title></FeatureType>
+    <FeatureType><Name>CADASTRALPARCELS.PARCELLAIRE_EXPRESS:parcelle</Name><Title>Parcelles cadastrales &amp; limites</Title></FeatureType>
+    <FeatureType><Name>BDTOPO_V3:batiment</Name><Title>Bâtiments</Title></FeatureType>
+    <FeatureType><Title>sans nom</Title></FeatureType>
+  </FeatureTypeList></wfs:WFS_Capabilities>`;
+  const cat = parseWfsCapabilities(xml);
+  assert.equal(cat.length, 6);
+  assert.equal(cat[1].title, 'Registre parcellaire 2023 & co');
+  assert.equal(cat[4].title, 'Parcelles cadastrales & limites');
+  assert.deepEqual(searchCatalog(cat, 'rpg').map((c) => c.name),
+    ['RPG.LATEST:parcelles_graphiques', 'RPG.2023:ilots_anonymes', 'RPG.2023:parcelles_graphiques', 'RPG.2018:parcelles_graphiques']);
+  assert.deepEqual(searchCatalog(cat, 'rpg parcelles 2023').map((c) => c.name), ['RPG.2023:parcelles_graphiques']);
+  assert.deepEqual(searchCatalog(cat, 'cadastr').map((c) => c.name), ['CADASTRALPARCELS.PARCELLAIRE_EXPRESS:parcelle']);
+  assert.equal(searchCatalog(cat, '').length, 6);
+  assert.equal(layerLabel(cat[1]), 'RPG 2023 — parcelles graphiques');
+  assert.equal(layerLabel(cat[3]), 'RPG (dernier millésime) — parcelles graphiques');
+  assert.equal(layerLabel(cat[5]), 'Bâtiments');
+  // la ligne produite est relue par la configuration, et s'ajoute aux couches par défaut
+  const line = wfsSpecLine('https://data.geopf.fr/wfs', cat[1]);
+  const spec = parseLayerSpec(line);
+  assert.deepEqual([spec.type, spec.featureTypeName, spec.label, spec.baseUrl], ['wfs', 'RPG.2023:parcelles_graphiques', 'RPG 2023 — parcelles graphiques', 'https://data.geopf.fr/wfs']);
+  assert.deepEqual(loadLayerSpecs(line).reference.map((r) => r.label), ['Parcelles RPG 2018', 'RPG 2023 — parcelles graphiques']);
+  assert.equal(capabilitiesUrl('https://data.geopf.fr/wfs'), 'https://data.geopf.fr/wfs?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetCapabilities');
+  assert.deepEqual(parseWfsCapabilities('<html>erreur</html>'), []);
 });

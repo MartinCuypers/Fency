@@ -134,3 +134,43 @@ export function outerRingAt(feature, [lon, lat]) {
   const hit = polys.find((p) => contains(p[0])) ?? polys.reduce((a, b) => (b[0].length > a[0].length ? b : a));
   return hit[0];
 }
+
+// ------------------------------------------------------------------ catalogue d'un serveur WFS
+export const capabilitiesUrl = (baseUrl) =>
+  baseUrl + (baseUrl.includes('?') ? '&' : '?') + 'SERVICE=WFS&VERSION=2.0.0&REQUEST=GetCapabilities';
+
+/** Extrait les couches (nom technique, titre) d'un document GetCapabilities WFS. */
+export function parseWfsCapabilities(xml) {
+  const text = (block, tag) => {
+    const m = block.match(new RegExp(`<(?:\\w+:)?${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</(?:\\w+:)?${tag}>`));
+    return m ? m[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&apos;/g, "'").replace(/&quot;/g, '"').trim() : '';
+  };
+  const out = [];
+  for (const m of xml.matchAll(/<(?:\w+:)?FeatureType(?:\s[^>]*)?>([\s\S]*?)<\/(?:\w+:)?FeatureType>/g)) {
+    const name = text(m[1], 'Name');
+    if (name) out.push({ name, title: text(m[1], 'Title') });
+  }
+  return out;
+}
+
+/** Libellé lisible d'une couche : « RPG 2023 — parcelles graphiques » pour les couches du RPG. */
+export function layerLabel({ name, title }) {
+  const rpg = name.match(/^RPG\.(\w+):(.+)$/i);
+  if (rpg) return `RPG ${rpg[1] === 'LATEST' ? '(dernier millésime)' : rpg[1]} — ${rpg[2].replace(/_/g, ' ')}`;
+  return title || name;
+}
+
+/** Filtre et trie un catalogue : les mots de la recherche doivent tous être présents ; RPG récents d'abord. */
+export function searchCatalog(catalog, query) {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const year = (n) => (/^RPG\.LATEST:/i.test(n) ? 9999 : Number(n.match(/^RPG\.(\d{4}):/i)?.[1] ?? 0));
+  return catalog
+    .filter((c) => words.every((w) => `${c.name} ${c.title}`.toLowerCase().includes(w)))
+    .sort((a, b) => year(b.name) - year(a.name) || a.name.localeCompare(b.name));
+}
+
+/** Ligne de configuration d'une couche WFS choisie dans un catalogue. */
+export function wfsSpecLine(baseUrl, entry) {
+  const clean = (t) => String(t).replace(/["|;]/g, ' ').trim();
+  return `Type=Wfs;Label="${clean(layerLabel(entry))}";BaseUrl="${clean(baseUrl)}";FeatureTypeName="${clean(entry.name)}"`;
+}

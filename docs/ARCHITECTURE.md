@@ -102,6 +102,9 @@ On peut en ajouter sans toucher au code avec la variable de compilation `VITE_FE
 - Les couches `Wfs` apparaissent dans « Couche de référence ». Elles sont chargées pour la zone affichée à
   partir du zoom 14 (1 500 objets au plus). L'ordre des axes (latitude/longitude) attendu par le serveur est
   détecté automatiquement, à la requête comme à la réponse.
+- Le bouton « ＋ Couches » lit le catalogue du serveur WFS (`GetCapabilities`) et propose les couches qui
+  y existent réellement : autres millésimes du RPG, îlots, cadastre… La recherche porte sur le nom et le titre.
+  Les couches choisies sont mémorisées sur l'appareil (`localStorage`, clé `fency.customLayers`), au même format.
 - `src/parcels.js` (chargé à la demande) contient la fusion et la découpe. Les trous des polygones sont ignorés.
 
 Non vérifié contre les services réels (injoignables depuis l'environnement de développement) : les paramètres

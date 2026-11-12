@@ -9,20 +9,24 @@ import { prepareLine, locate, pointAt, postPositions, estimateMaterial } from '.
 import { createBackend, readConfig } from './backends/index.js';
 import { uid } from './backends/types.js';
 import { createSession } from './session.js';
-import { loadLayerSpecs, tileUrl, tileOptions, wfsUrl, normalizeWfs, outerRingAt, BBOX_VARIANTS } from './layers.js';
+import { loadLayerSpecs, tileUrl, tileOptions, wfsUrl, normalizeWfs, outerRingAt, BBOX_VARIANTS, capabilitiesUrl, parseWfsCapabilities, searchCatalog, layerLabel, wfsSpecLine } from './layers.js';
 
 const $ = (id) => document.getElementById(id);
 // Pont vers l'application Android (RTK natif), absent dans le navigateur
 const android = window.FencyAndroid || null;
 const LEGACY_KEY = 'fency.plan.v1'; // plan unique des versions sans liste de plans
 const safe = (fn, dflt) => { try { return fn(); } catch { return dflt; } };
+const escapeHtml = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 // reprise des données enregistrées sous l'ancien nom (FenceMapper)
 safe(() => { for (const k of ['plan.v1', 'basemap']) { const o = localStorage.getItem('fencemapper.' + k); if (o && !localStorage.getItem('fency.' + k)) localStorage.setItem('fency.' + k, o); } });
 
 // ---------------------------------------------------------------- carte
 const map = L.map('map', { zoomControl: true, maxZoom: 21 }).setView([46.6, 2.4], 6);
 
-const layerSpecs = loadLayerSpecs(import.meta.env.VITE_FENCY_LAYERS);
+// couches ajoutées par l'utilisateur depuis le catalogue d'un serveur (mémorisées sur l'appareil)
+let customLayers = safe(() => JSON.parse(localStorage.getItem('fency.customLayers')), null) ?? [];
+const readLayers = () => loadLayerSpecs([import.meta.env.VITE_FENCY_LAYERS, ...customLayers].filter(Boolean).join('|'));
+let layerSpecs = readLayers();
 const basemaps = Object.fromEntries(layerSpecs.basemaps.map((spec) =>
   [spec.id, L.tileLayer(tileUrl(spec), { maxZoom: 21, crossOrigin: true, ...tileOptions(spec) })]));
 $('basemap').innerHTML = layerSpecs.basemaps.map((b) => `<option value="${b.id}">${b.label}</option>`).join('');
@@ -202,7 +206,19 @@ const refLayer = L.geoJSON(null, {
     });
   },
 }).addTo(map);
-$('ref-layer').innerHTML += layerSpecs.reference.map((r) => `<option value="${r.id}">${r.label}</option>`).join('');
+function fillRefSelect() {
+  $('ref-layer').innerHTML = '<option value="">Aucune</option>' +
+    layerSpecs.reference.map((r) => `<option value="${escapeHtml(r.id)}">${escapeHtml(r.label)}</option>`).join('');
+  $('ref-layer').value = ref.spec?.id ?? '';
+}
+function selectReference(id) {
+  ref.spec = layerSpecs.reference.find((r) => r.id === id) ?? null;
+  ref.variant = null;
+  $('ref-layer').value = ref.spec?.id ?? '';
+  safe(() => localStorage.setItem('fency.refLayer', ref.spec?.id ?? ''));
+  loadReference();
+}
+fillRefSelect();
 
 async function loadReference() {
   ref.ctrl?.abort();
@@ -235,11 +251,68 @@ async function loadReference() {
 }
 const scheduleReference = () => { clearTimeout(ref.timer); ref.timer = setTimeout(loadReference, 350); };
 map.on('moveend', scheduleReference);
-$('ref-layer').addEventListener('change', (e) => {
-  ref.spec = layerSpecs.reference.find((r) => r.id === e.target.value) ?? null;
-  ref.variant = null;
-  safe(() => localStorage.setItem('fency.refLayer', ref.spec?.id ?? ''));
-  loadReference();
+$('ref-layer').addEventListener('change', (e) => selectReference(e.target.value));
+
+// --- catalogue : ajouter des couches proposées par le serveur (autres millésimes du RPG, cadastre…)
+const catalogs = new Map(); // adresse du serveur -> [{ name, title }]
+function saveCustomLayers(lines) {
+  customLayers = lines;
+  safe(() => localStorage.setItem('fency.customLayers', JSON.stringify(lines)));
+  layerSpecs = readLayers();
+  if (ref.spec && !layerSpecs.reference.some((r) => r.id === ref.spec.id)) selectReference('');
+  fillRefSelect(); renderMyLayers();
+}
+function addCatalogLayer(baseUrl, entry) {
+  const line = wfsSpecLine(baseUrl, entry);
+  const id = loadLayerSpecs(line).reference.at(-1).id;
+  if (!layerSpecs.reference.some((r) => r.id === id)) saveCustomLayers([...customLayers, line]);
+  selectReference(id);
+  $('dlg-layers').close();
+  toast(map.getZoom() < REF_MIN_ZOOM ? 'Couche ajoutée. Zoomez sur vos parcelles pour l\'afficher.' : 'Couche ajoutée.');
+}
+function renderMyLayers() {
+  const box = $('cat-mine');
+  box.innerHTML = customLayers.length ? '' : '<p class="hint">Aucune.</p>';
+  customLayers.forEach((line, i) => {
+    const spec = loadLayerSpecs(line).reference.at(-1);
+    const row = document.createElement('div'); row.className = 'cat-item';
+    row.innerHTML = `<div><b>${escapeHtml(spec.label)}</b><small>${escapeHtml(spec.featureTypeName)}</small></div><button class="danger">Retirer</button>`;
+    row.querySelector('button').addEventListener('click', () => saveCustomLayers(customLayers.filter((_, j) => j !== i)));
+    box.appendChild(row);
+  });
+}
+async function searchLayers() {
+  const baseUrl = $('cat-url').value.trim(), status = (t) => { $('cat-status').textContent = t; };
+  if (!baseUrl) return;
+  $('cat-results').innerHTML = '';
+  if (!catalogs.has(baseUrl)) {
+    status('Lecture du catalogue du serveur (peut prendre quelques secondes)…');
+    try {
+      const res = await fetch(capabilitiesUrl(baseUrl));
+      if (!res.ok) throw new Error(`erreur ${res.status}`);
+      const list = parseWfsCapabilities(await res.text());
+      if (!list.length) throw new Error('aucune couche dans la réponse');
+      catalogs.set(baseUrl, list);
+    } catch (e) {
+      return status(`Catalogue indisponible (${e.message === 'Failed to fetch' ? 'serveur injoignable' : e.message}). Vous pouvez saisir le nom de la couche ci-dessous.`);
+    }
+  }
+  const found = searchCatalog(catalogs.get(baseUrl), $('cat-query').value);
+  status(`${found.length} couche${found.length > 1 ? 's' : ''} trouvée${found.length > 1 ? 's' : ''} sur ${catalogs.get(baseUrl).length}${found.length > 80 ? ' (80 premières affichées : précisez la recherche)' : ''}.`);
+  for (const entry of found.slice(0, 80)) {
+    const row = document.createElement('div'); row.className = 'cat-item';
+    row.innerHTML = `<div><b>${escapeHtml(layerLabel(entry))}</b><small>${escapeHtml(entry.name)}</small></div><button>Ajouter</button>`;
+    row.querySelector('button').addEventListener('click', () => addCatalogLayer(baseUrl, entry));
+    $('cat-results').appendChild(row);
+  }
+}
+$('btn-layers').addEventListener('click', (e) => { e.preventDefault(); $('dlg-layers').showModal(); renderMyLayers(); searchLayers(); });
+$('btn-layers-close').addEventListener('click', () => $('dlg-layers').close());
+$('btn-cat-search').addEventListener('click', searchLayers);
+$('cat-query').addEventListener('keydown', (e) => { if (e.key === 'Enter') searchLayers(); });
+$('btn-cat-manual').addEventListener('click', () => {
+  const name = $('cat-manual').value.trim(), baseUrl = $('cat-url').value.trim();
+  if (name && baseUrl) addCatalogLayer(baseUrl, { name, title: '' });
 });
 { // couche choisie la dernière fois
   const saved = safe(() => localStorage.getItem('fency.refLayer'), '');
@@ -601,7 +674,6 @@ let backend = null;
 const showPlanName = () => { $('plan-name').textContent = session?.current?.name ?? 'Aucun plan ouvert'; };
 const planLink = (id) => `${android ? (import.meta.env.VITE_FENCY_PUBLIC_URL || '') : location.origin + location.pathname}?plan=${id}`;
 const fmtDate = (ms) => new Date(ms).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
-const escapeHtml = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 /** Ouvre le plan du lien, sinon le dernier utilisé, sinon le plus récent, sinon en crée un. */
 async function openDefaultPlan() {
