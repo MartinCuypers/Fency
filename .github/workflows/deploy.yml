@@ -20,6 +20,12 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+        env:
+          # Hébergement des plans : variables du dépôt (Settings > Secrets and variables > Actions > Variables).
+          # Vides : stockage local sur l'appareil.
+          VITE_FENCY_BACKEND: ${{ vars.FENCY_BACKEND }}
+          VITE_FIREBASE_CONFIG: ${{ vars.FIREBASE_CONFIG }}
+          VITE_FENCY_PUBLIC_URL: ${{ vars.FENCY_PUBLIC_URL }}
       - uses: actions/upload-pages-artifact@v3
         with: { path: dist }
   deploy:

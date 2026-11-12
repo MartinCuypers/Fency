@@ -8,7 +8,8 @@ Application web / smartphone (PWA installable) pour **concevoir et poser des cl�
 - Carte satellite (IGN, Esri) ou plan, dessin du champ (polygone/rectangle) et de clôtures (lignes), accrochage aux sommets.
 - Génération de clôtures de subdivision parallèles, par largeur de bande (m) ou par surface (ares), pour tout type de forme de champ ; direction réglable ou alignée sur le plus long côté ; choix du côté de départ ; clôture du périmètre en option.
 - Surface de chaque bande, longueur totale, nombre de piquets et longueur de fil estimés.
-- Sauvegarde automatique dans le navigateur, export / import GeoJSON.
+- Plusieurs plans nommés, enregistrés automatiquement ; export / import GeoJSON.
+- Stockage et authentification modulables (local par défaut, Firebase, autre hébergeur) pour le travail collaboratif : voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 **Terrain (sur le quad)**
 - Choix d'une clôture (ou la plus proche automatiquement), puis guidage GPS : grande flèche d'écart latéral (gauche / droite), distance au prochain piquet, longueur restante, précision GPS.

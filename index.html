@@ -70,11 +70,18 @@
       <div id="material" class="info"></div>
 
       <h3>Plan</h3>
+      <div class="row plan-head"><b id="plan-name">…</b><span id="plan-sync" class="badge"></span></div>
+      <div class="row">
+        <button id="btn-plans">Mes plans…</button>
+        <button id="btn-share" hidden>Partager</button>
+        <button id="btn-account" hidden>Se connecter</button>
+      </div>
       <div class="row">
         <button id="btn-export">Exporter</button>
         <button id="btn-import">Importer</button>
         <button id="btn-reset" class="danger">Tout effacer</button>
       </div>
+      <p id="plan-backend" class="hint"></p>
       <input id="file-import" type="file" accept=".geojson,.json,application/geo+json" hidden />
     </div>
   </section>
@@ -108,6 +115,30 @@
       </div>
     </div>
   </section>
+
+  <dialog id="dlg-plans">
+    <h3>Mes plans</h3>
+    <div id="plans-list"></div>
+    <div class="row">
+      <button id="btn-plan-new" class="primary">Nouveau plan</button>
+      <button id="btn-plan-join" hidden>Rejoindre…</button>
+      <button id="btn-plans-close">Fermer</button>
+    </div>
+  </dialog>
+
+  <dialog id="dlg-auth">
+    <h3>Connexion</h3>
+    <p class="hint">Connectez-vous pour retrouver vos plans sur tous vos appareils et les partager.</p>
+    <button id="btn-auth-google" class="wide">Continuer avec Google</button>
+    <label>E-mail<input id="auth-email" type="email" autocomplete="email" /></label>
+    <label>Mot de passe<input id="auth-pass" type="password" autocomplete="current-password" /></label>
+    <div id="auth-error" class="error"></div>
+    <div class="row">
+      <button id="btn-auth-login" class="primary">Se connecter</button>
+      <button id="btn-auth-create">Créer un compte</button>
+      <button id="btn-auth-close">Fermer</button>
+    </div>
+  </dialog>
 
   <div id="toast"></div>
   <script type="module" src="/src/main.js"></script>

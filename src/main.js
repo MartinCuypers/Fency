@@ -6,11 +6,14 @@ import './style.css';
 import { areaLL, lengthLL, longestEdgeBearing, formatArea, formatLength } from './geo.js';
 import { generateStrips } from './generate.js';
 import { prepareLine, locate, pointAt, postPositions, estimateMaterial } from './guidance.js';
+import { createBackend, readConfig } from './backends/index.js';
+import { uid } from './backends/types.js';
+import { createSession } from './session.js';
 
 const $ = (id) => document.getElementById(id);
 // Pont vers l'application Android (RTK natif), absent dans le navigateur
 const android = window.FencyAndroid || null;
-const STORE_KEY = 'fency.plan.v1';
+const LEGACY_KEY = 'fency.plan.v1'; // plan unique des versions sans liste de plans
 const safe = (fn, dflt) => { try { return fn(); } catch { return dflt; } };
 // reprise des données enregistrées sous l'ancien nom (FenceMapper)
 safe(() => { for (const k of ['plan.v1', 'basemap']) { const o = localStorage.getItem('fencemapper.' + k); if (o && !localStorage.getItem('fency.' + k)) localStorage.setItem('fency.' + k, o); } });
@@ -84,24 +87,41 @@ function styleDrawn() {
   drawn.eachLayer((l) => l.setStyle(isField(l) ? (l === cur ? STYLE.fieldSel : STYLE.field) : STYLE.line));
 }
 
-function register(layer) {
+// Chaque élément dessiné porte un identifiant stable : c'est l'unité d'enregistrement
+// et de synchronisation entre appareils.
+const byId = new Map();   // id -> calque
+let applying = false;     // vrai pendant qu'on applique des données venues du stockage
+let session = null;       // session de travail (créée au démarrage)
+const featureOf = (layer) => layer.toGeoJSON(8); // 8 décimales ≈ 1 mm (le guidage RTK est centimétrique)
+const syncLayer = (layer) => { if (!applying) session?.putFeature(featureOf(layer)); };
+
+function register(layer, id = uid()) {
   const kind = isField(layer) ? 'field' : 'line';
-  layer.feature = { type: 'Feature', properties: { kind }, geometry: null };
+  layer.feature = { type: 'Feature', properties: { id, kind }, geometry: null };
+  byId.set(id, layer);
   if (!drawn.hasLayer(layer)) drawn.addLayer(layer);
   layer.on('click', () => {
     if (state.mode === 'field' && kind === 'line') return pickLine(`u:${L.stamp(layer)}`);
     if (kind === 'field') { state.selected = layer; styleDrawn(); refresh(false); }
   });
-  ['pm:edit', 'pm:dragend', 'pm:vertexadded', 'pm:vertexremoved'].forEach((ev) => layer.on(ev, () => refresh()));
+  ['pm:edit', 'pm:dragend', 'pm:vertexadded', 'pm:vertexremoved'].forEach((ev) => layer.on(ev, () => { syncLayer(layer); refresh(); }));
   styleDrawn();
 }
 
 map.on('pm:create', (e) => {
   register(e.layer);
+  syncLayer(e.layer);
   if (isField(e.layer)) state.selected = e.layer;
   refresh();
 });
-drawn.on('layerremove', () => setTimeout(() => refresh(), 0));
+drawn.on('layerremove', (e) => {
+  const id = e.layer.feature?.properties?.id;
+  if (id && byId.get(id) === e.layer) {
+    byId.delete(id);
+    if (!applying) session?.removeFeature(id);
+  }
+  setTimeout(() => refresh(), 0);
+});
 
 // ---------------------------------------------------------------- génération
 const params = () => ({
@@ -172,11 +192,7 @@ function refresh(save = true) {
   } else $('material').innerHTML = '';
   $('gen-angle-val').textContent = `${p.angle}°`;
   fillLineSelect();
-  if (save) persist();
-}
-
-function persist() {
-  safe(() => localStorage.setItem(STORE_KEY, JSON.stringify({ features: drawn.toGeoJSON(), params: params(), genActive: state.genActive })));
+  if (save && !applying) session?.saveMeta({ params: params(), genActive: state.genActive });
 }
 
 // ---------------------------------------------------------------- formulaire de génération
@@ -199,22 +215,28 @@ $('btn-align').addEventListener('click', () => {
 });
 
 // ---------------------------------------------------------------- import / export / reset
-function loadFeatures(fc) {
+/** Ajoute des éléments GeoJSON à la carte. `keepIds` : éléments venus du stockage (identifiants conservés). */
+function loadFeatures(fc, { keepIds = false } = {}) {
   const layers = [];
   L.geoJSON(fc, {
     filter: (f) => !['generated', 'perimeter'].includes(f.properties?.kind),
-    onEachFeature: (_, l) => layers.push(l),
+    onEachFeature: (f, l) => layers.push([f, l]),
   });
-  for (const l of layers) if (l instanceof L.Polyline) register(l);
-  return layers.length;
+  let n = 0;
+  for (const [f, l] of layers) {
+    if (!(l instanceof L.Polyline)) continue;
+    register(l, keepIds && f.properties?.id ? f.properties.id : uid());
+    syncLayer(l); n++;
+  }
+  return n;
 }
 
 $('btn-export').addEventListener('click', () => {
-  const fc = drawn.toGeoJSON();
-  generated.eachLayer((l, i) => { /* lignes générées incluses pour les SIG */ });
+  const fc = drawn.toGeoJSON(8);
   state.genLines.forEach((gl) => fc.features.push({ type: 'Feature', properties: { kind: 'generated', label: gl.label, length_m: Math.round(gl.length) }, geometry: { type: 'LineString', coordinates: gl.coords } }));
-  fc.fency = { version: 1, params: params(), genActive: state.genActive };
-  const name = `fency-${new Date().toISOString().slice(0, 10)}.geojson`;
+  fc.fency = { version: 1, name: session?.current?.name, params: params(), genActive: state.genActive };
+  const slug = (session?.current?.name || 'plan').toLowerCase().normalize('NFD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'plan';
+  const name = `fency-${slug}-${new Date().toISOString().slice(0, 10)}.geojson`;
   if (android) return android.saveFile(name, JSON.stringify(fc));
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(fc)], { type: 'application/geo+json' }));
@@ -408,16 +430,192 @@ function setMode(mode) {
 $('tab-design').addEventListener('click', () => setMode('design'));
 $('tab-field').addEventListener('click', () => setMode('field'));
 
-// ---------------------------------------------------------------- démarrage
-const saved = safe(() => JSON.parse(localStorage.getItem(STORE_KEY)), null);
-if (saved) {
-  applyParams(saved.params);
-  loadFeatures(saved.features);
-  state.genActive = !!saved.genActive;
-  if (drawn.getLayers().length) map.fitBounds(drawn.getBounds(), { padding: [30, 30], maxZoom: 18 });
+// ---------------------------------------------------------------- plans, comptes, partage
+const sessionUi = {
+  applyPlan(meta, features) {
+    applying = true;
+    try {
+      drawn.clearLayers(); byId.clear(); state.selected = null;
+      applyParams(meta.params); state.genActive = !!meta.genActive;
+      loadFeatures({ type: 'FeatureCollection', features }, { keepIds: true });
+    } finally { applying = false; }
+    refresh(false); showPlanName();
+    if (drawn.getLayers().length) map.fitBounds(drawn.getBounds(), { padding: [30, 30], maxZoom: 18 });
+  },
+  applyMeta(meta) {
+    applying = true;
+    try { applyParams(meta.params); state.genActive = !!meta.genActive; } finally { applying = false; }
+    refresh(false); showPlanName();
+  },
+  upsertFeature(feature) {
+    const id = feature.properties.id, old = byId.get(id), wasSelected = old && state.selected === old;
+    applying = true;
+    try {
+      if (old) drawn.removeLayer(old);
+      byId.delete(id);
+      loadFeatures({ type: 'FeatureCollection', features: [feature] }, { keepIds: true });
+    } finally { applying = false; }
+    if (wasSelected) state.selected = byId.get(id);
+    refresh(false);
+  },
+  removeFeature(id) {
+    const layer = byId.get(id);
+    if (!layer) return;
+    applying = true;
+    try { byId.delete(id); drawn.removeLayer(layer); } finally { applying = false; }
+    refresh(false);
+  },
+  planGone() { toast('Ce plan a été supprimé.'); openDefaultPlan(); },
+  status(st) {
+    const el = $('plan-sync');
+    el.textContent = { saving: 'Enregistrement…', saved: 'Enregistré', error: 'Non enregistré' }[st] ?? '';
+    el.className = `badge ${st}`;
+  },
+};
+
+let backend = null;
+const showPlanName = () => { $('plan-name').textContent = session?.current?.name ?? 'Aucun plan ouvert'; };
+const planLink = (id) => `${android ? (import.meta.env.VITE_FENCY_PUBLIC_URL || '') : location.origin + location.pathname}?plan=${id}`;
+const fmtDate = (ms) => new Date(ms).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
+const escapeHtml = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+/** Ouvre le plan du lien, sinon le dernier utilisé, sinon le plus récent, sinon en crée un. */
+async function openDefaultPlan() {
+  const url = new URL(location.href), shared = url.searchParams.get('plan');
+  if (shared) {
+    url.searchParams.delete('plan'); history.replaceState(null, '', url);
+    if (await session.open(shared, { join: true })) return;
+    toast('Plan partagé introuvable ou inaccessible.');
+  }
+  const last = safe(() => localStorage.getItem(`fency.lastPlan.${backend.name}`), null);
+  if (last && await session.open(last)) return;
+  const plans = await session.list();
+  if (plans.length && await session.open(plans[0].id)) return;
+  // premier lancement : reprendre le plan unique des anciennes versions, s'il existe
+  const legacy = backend.name === 'local' ? safe(() => JSON.parse(localStorage.getItem(LEGACY_KEY)), null) : null;
+  const features = (legacy?.features?.features ?? []).map((f) => ({ ...f, properties: { ...f.properties, id: uid() } }));
+  await session.create('Mon plan', { features, params: legacy?.params ?? params(), genActive: !!legacy?.genActive });
 }
+
+async function renderPlans() {
+  const box = $('plans-list');
+  box.textContent = 'Chargement…';
+  let plans;
+  try { plans = await session.list(); } catch (e) { box.textContent = 'Liste indisponible : ' + (e.message ?? e); return; }
+  box.innerHTML = plans.length ? '' : '<p class="hint">Aucun plan.</p>';
+  for (const p of plans) {
+    const row = document.createElement('div');
+    row.className = 'plan-item' + (p.id === session.current?.id ? ' current' : '');
+    row.innerHTML = `<div><b>${escapeHtml(p.name)}</b><small>${fmtDate(p.updatedAt)}${p.memberIds.length > 1 ? ` · ${p.memberIds.length} membres` : ''}</small></div>
+      <span><button data-act="open">Ouvrir</button><button data-act="rename" title="Renommer">✎</button><button data-act="delete" class="danger" title="Supprimer">🗑</button></span>`;
+    row.addEventListener('click', async (e) => {
+      const act = e.target.dataset?.act;
+      if (act === 'open') { await session.open(p.id); $('dlg-plans').close(); }
+      if (act === 'rename') {
+        const name = prompt('Nom du plan :', p.name)?.trim();
+        if (!name) return;
+        if (p.id === session.current?.id) { session.saveMeta({ name }); await session.flush(); showPlanName(); }
+        else await backend.store.saveMeta(p.id, { name });
+        renderPlans();
+      }
+      if (act === 'delete') {
+        if (!confirm(`Supprimer définitivement « ${p.name} » ?`)) return;
+        const wasCurrent = p.id === session.current?.id;
+        try { await session.remove(p.id); } catch { return toast('Suppression refusée (réservée au propriétaire).'); }
+        if (wasCurrent) await openDefaultPlan();
+        renderPlans();
+      }
+    });
+    box.appendChild(row);
+  }
+}
+
+$('btn-plans').addEventListener('click', () => { if (!session) return; $('dlg-plans').showModal(); renderPlans(); });
+$('btn-plans-close').addEventListener('click', () => $('dlg-plans').close());
+$('btn-plan-new').addEventListener('click', async () => {
+  const name = prompt('Nom du nouveau plan :', 'Nouveau plan')?.trim();
+  if (!name) return;
+  await session.create(name, { params: params() });
+  $('dlg-plans').close();
+});
+$('btn-plan-join').addEventListener('click', async () => {
+  const input = prompt('Collez le lien ou le code du plan partagé :')?.trim();
+  if (!input) return;
+  const id = input.includes('plan=') ? new URL(input, location.href).searchParams.get('plan') : input;
+  if (id && await session.open(id, { join: true })) $('dlg-plans').close();
+  else toast('Plan introuvable ou inaccessible.');
+});
+$('btn-share').addEventListener('click', async () => {
+  if (!session?.current) return;
+  await session.flush();
+  const link = planLink(session.current.id);
+  try { await navigator.clipboard.writeText(link); toast('Lien de partage copié. Toute personne connectée qui l\'ouvre peut modifier ce plan.'); }
+  catch { prompt('Lien de partage (à copier) :', link); }
+});
+
+// --- compte (seulement si l'hébergement gère des comptes)
+function showAccount(user) {
+  $('btn-account').textContent = user ? `👤 ${user.name}` : 'Se connecter';
+}
+$('btn-account').addEventListener('click', async () => {
+  if (!backend.auth.user) return $('dlg-auth').showModal();
+  if (confirm(`Se déconnecter de ${backend.auth.user.name} ?`)) { await session.flush(); await backend.auth.signOut(); }
+});
+$('btn-auth-close').addEventListener('click', () => $('dlg-auth').close());
+async function signIn(opts) {
+  $('auth-error').textContent = '';
+  try { await backend.auth.signIn(opts); $('dlg-auth').close(); }
+  catch (e) {
+    const { authErrorMessage } = await import('./backends/firebase/auth.js');
+    $('auth-error').textContent = authErrorMessage(e);
+  }
+}
+$('btn-auth-google').addEventListener('click', () => signIn({ method: 'google' }));
+$('btn-auth-login').addEventListener('click', () => signIn({ method: 'password', email: $('auth-email').value.trim(), password: $('auth-pass').value }));
+$('btn-auth-create').addEventListener('click', () => signIn({ method: 'password', email: $('auth-email').value.trim(), password: $('auth-pass').value, create: true }));
+
+// ---------------------------------------------------------------- démarrage
+async function boot() {
+  backend = await createBackend({ ...readConfig(import.meta.env), webview: !!android });
+  if (backend.fallback) toast('Mode en ligne indisponible : les plans restent sur cet appareil.');
+  session = createSession({
+    store: backend.store, ui: sessionUi,
+    remember: {
+      get: () => safe(() => localStorage.getItem(`fency.lastPlan.${backend.name}`), null),
+      set: (id) => safe(() => (id ? localStorage.setItem(`fency.lastPlan.${backend.name}`, id) : localStorage.removeItem(`fency.lastPlan.${backend.name}`))),
+    },
+  });
+  const { auth, store } = backend;
+  $('btn-share').hidden = !store.capabilities.sharing;
+  $('btn-plan-join').hidden = !store.capabilities.sharing;
+  $('btn-account').hidden = !auth.capabilities.signIn;
+  $('btn-auth-google').hidden = !auth.capabilities.methods.includes('google');
+  $('plan-backend').textContent = store.capabilities.sharing
+    ? 'Plans en ligne : synchronisés et partageables.'
+    : 'Plans enregistrés sur cet appareil uniquement.';
+
+  await auth.ready;
+  let lastUserId = Symbol('inconnu'); // ni un identifiant, ni « déconnecté » (null)
+  auth.onChange(async (user) => {
+    const id = user?.id ?? null;
+    if (id === lastUserId) return;
+    lastUserId = id;
+    showAccount(user);
+    if (user) await openDefaultPlan().catch((e) => { console.warn(e); toast('Impossible d\'ouvrir les plans.'); });
+    else {
+      session.close();
+      applying = true; try { drawn.clearLayers(); byId.clear(); } finally { applying = false; }
+      refresh(false); showPlanName();
+      if (auth.capabilities.signIn) $('dlg-auth').showModal();
+    }
+  });
+}
+// ne rien perdre si l'on quitte l'application juste après une modification
+document.addEventListener('visibilitychange', () => { if (document.hidden) session?.flush(); });
+
 refresh(false);
-window.__fm = { map, drawn, state, gps, register, refresh, onPos, setMode, L }; // utile pour les tests
+const ready = boot().catch((e) => { console.error(e); toast('Erreur au démarrage du stockage.'); });
+window.__fm = { map, drawn, state, gps, register, refresh, onPos, setMode, L, ready, syncLayer, get session() { return session; }, get backend() { return backend; } }; // utile pour les tests
 
 if (import.meta.env.PROD && !android && 'serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js').catch(() => {});
