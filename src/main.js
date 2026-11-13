@@ -5,7 +5,9 @@ import '@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css';
 import './style.css';
 import { areaLL, lengthLL, longestEdgeBearing, formatArea, formatLength } from './geo.js';
 import { generateStrips } from './generate.js';
-import { prepareLine, locate, pointAt, postPositions, estimateMaterial } from './guidance.js';
+import { prepareLine, locate, pointAt, estimateMaterial, toStart, bearingAt, nextPhase, nearerEndIsLast } from './guidance.js';
+import { startCompass, angleDiff } from './compass.js';
+import { makeCamera, toCameraFrame, drawScene } from './perspective.js';
 import { createBackend, readConfig } from './backends/index.js';
 import { uid } from './backends/types.js';
 import { createSession } from './session.js';
@@ -352,7 +354,6 @@ const params = () => ({
   angle: parseInt($('gen-angle').value, 10),
   reverse: $('gen-reverse').checked,
   perimeter: $('gen-perimeter').checked,
-  spacing: parseFloat($('mat-spacing').value) || 10,
   rows: parseInt($('mat-rows').value, 10) || 1,
 });
 
@@ -405,10 +406,9 @@ function refresh(save = true) {
     : '';
   const p = params(), lines = allLines();
   if (lines.length) {
-    const m = estimateMaterial(lines.map((l) => l.length), { spacing: p.spacing, rows: p.rows });
+    const m = estimateMaterial(lines.map((l) => l.length), { rows: p.rows });
     $('material').innerHTML = `<table>
       <tr><td>Longueur de clôture</td><td>${formatLength(m.total)}</td></tr>
-      <tr><td>Piquets (tous les ${p.spacing} m)</td><td>≈ ${m.posts}</td></tr>
       <tr><td>Fil / ruban (${p.rows} rang${p.rows > 1 ? 's' : ''})</td><td>${formatLength(m.wire)}</td></tr></table>
       <small>Estimation indicative, hors portails et angles.</small>`;
   } else $('material').innerHTML = '';
@@ -424,7 +424,7 @@ $('gen-mode').addEventListener('change', () => {
   $('gen-value').value = area ? 30 : 20;
   refresh();
 });
-['gen-value', 'gen-angle', 'gen-reverse', 'gen-perimeter', 'mat-spacing', 'mat-rows'].forEach((id) => $(id).addEventListener('input', () => refresh()));
+['gen-value', 'gen-angle', 'gen-reverse', 'gen-perimeter', 'mat-rows'].forEach((id) => $(id).addEventListener('input', () => refresh()));
 $('btn-generate').addEventListener('click', () => {
   if (!currentField()) return toast('Dessinez d\'abord un champ (polygone).');
   state.genActive = true; refresh();
@@ -491,7 +491,7 @@ function applyParams(p) {
   $('gen-value-label').textContent = p.mode === 'area' ? 'Surface par bande (ares, 100 a = 1 ha)' : 'Largeur (m)';
   $('gen-value').value = p.value ?? 20; $('gen-angle').value = p.angle ?? 90;
   $('gen-reverse').checked = !!p.reverse; $('gen-perimeter').checked = p.perimeter !== false;
-  $('mat-spacing').value = p.spacing ?? 10; $('mat-rows').value = p.rows ?? 1;
+  $('mat-rows').value = p.rows ?? 1;
 }
 
 // ---------------------------------------------------------------- ma position
@@ -503,7 +503,14 @@ $('btn-locate').addEventListener('click', () => {
 });
 
 // ================================================================ MODE TERRAIN
-const gps = { watch: null, wake: null, last: null, target: 'auto', reversed: false, prep: null, prepKey: '', postIdx: 0, lines: [] };
+// Guidage en deux étapes : 1) rejoindre le départ de la clôture (flèche + distance) ;
+// 2) poser la clôture en restant sur la ligne (vue en perspective + quadrillage).
+const gps = {
+  watch: null, wake: null, on: false, last: null, accuracy: 0, lines: [],
+  target: 'auto', autoId: null, lineId: null, reversed: false, autoStart: true, // départ = extrémité la plus proche, sauf choix manuel
+  prep: null, loc: null, start: null, phase: null,
+  compass: null, heading: null, course: null, // { deg, t } : boussole, et cap de déplacement donné par le GPS
+};
 
 function fillLineSelect() {
   const sel = $('target-line');
@@ -514,11 +521,15 @@ function fillLineSelect() {
   sel.value = gps.lines.some((l) => l.id === prev) || prev === 'auto' ? prev : 'auto';
   gps.target = sel.value;
 }
-function pickLine(id) { gps.target = id; $('target-line').value = id; gps.postIdx = 0; gps.prepKey = ''; if (gps.last) update(); else drawTarget(); }
+/** Repart de zéro sur la ligne à suivre (nouvelle ligne, nouveau sens). */
+function resetGuidance({ autoStart = true } = {}) { gps.lineId = null; gps.phase = null; gps.autoStart = autoStart; }
+function pickLine(id) { gps.target = id; $('target-line').value = id; resetGuidance(); if (gps.last) update(); else drawTarget(); }
 $('target-line').addEventListener('change', (e) => pickLine(e.target.value));
-$('btn-reverse-line').addEventListener('click', () => { gps.reversed = !gps.reversed; gps.postIdx = 0; gps.prepKey = ''; update(); toast(gps.reversed ? 'Sens inversé' : 'Sens d\'origine'); });
-$('btn-post-next').addEventListener('click', () => { gps.postIdx++; update(); });
-$('btn-post-prev').addEventListener('click', () => { gps.postIdx = Math.max(0, gps.postIdx - 1); update(); });
+$('btn-reverse-line').addEventListener('click', () => {
+  gps.reversed = !gps.reversed; resetGuidance({ autoStart: false });
+  update(); toast('Départ à l\'autre extrémité de la clôture.');
+});
+$('btn-phase').addEventListener('click', () => { gps.phase = gps.phase === 'approach' ? 'lay' : 'approach'; render(); });
 
 function chooseLine(ll) {
   const lines = gps.lines;
@@ -529,67 +540,138 @@ function chooseLine(ll) {
   if (cur && dist(cur) < 15) return cur;
   let best = lines[0], bd = Infinity;
   for (const l of lines) { const d = dist(l); if (d < bd) { bd = d; best = l; } }
-  if (best.id !== gps.autoId) { gps.autoId = best.id; gps.postIdx = 0; gps.prepKey = ''; }
+  gps.autoId = best.id;
   return best;
 }
 
 const fmt1 = (m) => (m < 10 ? m.toFixed(1) : Math.round(m)).toString().replace('.', ',');
-const postMarker = L.marker([0, 0], { icon: L.divIcon({ className: '', html: '<div style="font-size:30px;line-height:1;transform:translate(-50%,-100%)">📌</div>', iconSize: [0, 0] }) });
-const me = L.marker([0, 0], { interactive: false, zIndexOffset: 1000, icon: L.divIcon({ className: 'quad-icon', html: '<div id="me-arrow">🔵</div>', iconSize: [28, 28], iconAnchor: [14, 14] }) });
-let targetPoly = null, postDots = [];
-
-function drawTarget() {
-  guideLayer.clearLayers(); targetPoly = null; postDots = [];
-  const line = gps.target === 'auto' ? gps.lines.find((l) => l.id === gps.autoId) : gps.lines.find((l) => l.id === gps.target);
-  if (!line) return;
-  targetPoly = L.polyline(line.coords.map(([lng, lat]) => [lat, lng]), { color: '#fff', weight: 7, opacity: 0.9, interactive: false }).addTo(guideLayer);
+// repère du quad sur la carte : une flèche quand le cap est connu, un point sinon
+const ME_ICON = '<svg id="me-arrow" viewBox="-16 -16 32 32" width="32" height="32">'
+  + '<path class="me-dir" d="M0,-14 L10,9 L0,3 L-10,9 Z" fill="#1565c0" stroke="#fff" stroke-width="2.5" stroke-linejoin="round" />'
+  + '<circle class="me-dot" r="7" fill="#1565c0" stroke="#fff" stroke-width="3" /></svg>';
+const me = L.marker([0, 0], { interactive: false, zIndexOffset: 1000, icon: L.divIcon({ className: 'quad-icon', html: ME_ICON, iconSize: [32, 32], iconAnchor: [16, 16] }) });
+/** Fait tourner un élément vers un angle par le plus court chemin (pas de grand tour en repassant par le nord). */
+const turned = new WeakMap();
+function rotateTo(el, deg) {
+  const prev = turned.get(el) ?? 0, next = prev + angleDiff(deg, prev);
+  turned.set(el, next); el.style.transform = `rotate(${next}deg)`;
 }
 
+/** Sur la carte : la clôture à suivre, son départ (vert) et son arrivée (rouge). */
+function drawTarget() {
+  guideLayer.clearLayers();
+  const line = gps.target === 'auto' ? gps.lines.find((l) => l.id === gps.autoId) : gps.lines.find((l) => l.id === gps.target);
+  if (!line) return;
+  const coords = gps.reversed ? [...line.coords].reverse() : line.coords;
+  L.polyline(coords.map(([lng, lat]) => [lat, lng]), { color: '#fff', weight: 7, opacity: 0.9, interactive: false }).addTo(guideLayer);
+  const dot = ([lng, lat], color) => L.circleMarker([lat, lng], { radius: 8, color: '#fff', weight: 3, fillColor: color, fillOpacity: 1, interactive: false }).addTo(guideLayer);
+  dot(coords[0], '#2e7d32'); dot(coords.at(-1), '#c62828');
+  if (gps.last) me.addTo(guideLayer);
+}
+
+/** Cap du quad : boussole si elle répond, sinon direction de déplacement donnée par le GPS. */
+function currentHeading() {
+  const now = Date.now();
+  if (gps.heading && now - gps.heading.t < 3000) return { deg: gps.heading.deg, source: 'boussole' };
+  if (gps.course && now - gps.course.t < 5000) return { deg: gps.course.deg, source: 'déplacement' };
+  return null;
+}
+
+/** Recalcule la position par rapport à la clôture et l'étape en cours. */
 function update() {
   const ll = gps.last; if (!ll) return;
   const line = chooseLine(ll);
-  const steer = $('steer'), sub = $('steer-sub');
-  if (!line) { steer.textContent = '—'; steer.className = 'steer'; sub.textContent = 'Aucune clôture à suivre : dessinez ou générez-en.'; return; }
-  const p = params();
-  const key = `${line.id}|${gps.reversed}|${p.spacing}`;
-  if (key !== gps.prepKey) {
+  if (!line) {
+    gps.prep = null; $('approach').hidden = true; $('lay').hidden = true; $('btn-phase').hidden = true;
+    $('guide-step').textContent = 'Aucune clôture à suivre : dessinez ou générez-en.';
+    return;
+  }
+  if (gps.lineId !== line.id) {
+    if (gps.autoStart) gps.reversed = nearerEndIsLast(line.coords, ll);
+    gps.lineId = line.id; gps.phase = null;
     gps.prep = prepareLine(gps.reversed ? [...line.coords].reverse() : line.coords);
-    gps.posts = postPositions(gps.prep.length, p.spacing);
-    gps.prepKey = key; gps.postIdx = Math.min(gps.postIdx, gps.posts.length);
     drawTarget();
-    postDots.forEach((d) => d.remove());
-    postDots = gps.posts.map((s) => { const q = pointAt(gps.prep, s); return L.circleMarker([q[1], q[0]], { radius: 4, color: '#fff', weight: 2, fillColor: '#e53935', fillOpacity: 1, interactive: false }).addTo(guideLayer); });
   }
-  const loc = locate(gps.prep, ll);
-  const abs = Math.abs(loc.cross);
-  // cross > 0 : à droite de la ligne -> corriger vers la gauche
-  steer.textContent = abs < 0.1 ? '✔' : `${loc.cross > 0 ? '←' : '→'} ${fmt1(abs)} m`;
-  steer.className = 'steer ' + (abs < 0.3 ? 'ok' : abs < 1 ? 'warn' : 'bad');
-  sub.textContent = abs < 0.1 ? 'Sur la ligne' : `${loc.cross > 0 ? 'À droite' : 'À gauche'} de la ligne — aller ${loc.cross > 0 ? 'à gauche' : 'à droite'}`;
+  gps.loc = locate(gps.prep, ll);
+  gps.start = toStart(gps.prep, ll);
+  gps.phase = nextPhase(gps.phase, { distStart: gps.start.dist, cross: gps.loc.cross, along: gps.loc.along, length: gps.prep.length, accuracy: gps.accuracy });
+  render();
+}
 
-  $('post-total').textContent = gps.posts.length;
-  $('post-idx').textContent = Math.min(gps.postIdx + 1, gps.posts.length);
-  if (gps.postIdx >= gps.posts.length) {
-    $('st-next').textContent = '✔'; postMarker.remove();
-  } else {
-    const s = gps.posts[gps.postIdx], ahead = s - loc.along;
-    $('st-next').textContent = `${ahead >= 0 ? '' : '↩ '}${fmt1(Math.abs(ahead))} m`;
-    const q = pointAt(gps.prep, s); postMarker.setLatLng([q[1], q[0]]).addTo(guideLayer);
+let renderQueued = false;
+function scheduleRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  requestAnimationFrame(() => { renderQueued = false; render(); });
+}
+
+function render() {
+  if (!gps.prep || !gps.last || !gps.loc) return;
+  const heading = currentHeading(), { loc, start, prep } = gps;
+  $('st-heading').textContent = heading ? `${Math.round(heading.deg)}°` : '—';
+  $('st-heading-label').textContent = heading ? `cap (${heading.source})` : 'cap indisponible';
+  const arrow = document.getElementById('me-arrow');
+  if (arrow) { arrow.classList.toggle('has-heading', !!heading); if (heading) rotateTo(arrow, heading.deg); }
+
+  const approach = gps.phase === 'approach';
+  $('approach').hidden = !approach; $('lay').hidden = approach;
+  $('btn-phase').hidden = false;
+  $('btn-phase').textContent = approach ? 'Passer à la pose' : 'Revenir au départ';
+
+  if (approach) {
+    $('guide-step').textContent = 'Étape 1 · Rejoindre le départ';
+    // flèche vers le départ, relative à l'orientation du téléphone (au nord si la boussole manque)
+    rotateTo($('approach-arrow'), start.bearing - (heading?.deg ?? 0));
+    $('approach-dist').textContent = `${fmt1(start.dist)} m`;
+    $('approach-sub').textContent = heading ? 'jusqu\'au départ de la clôture' : 'Boussole indisponible : flèche par rapport au nord';
+    $('st-left').textContent = formatLength(prep.length); $('st-left-label').textContent = 'longueur à poser';
+    return;
   }
-  $('st-left').textContent = formatLength(Math.max(0, gps.prep.length - loc.along));
-  postDots.forEach((d, i) => d.setStyle({ fillColor: i < gps.postIdx ? '#43a047' : '#e53935' }));
+
+  const done = gps.phase === 'done', abs = Math.abs(loc.cross);
+  $('guide-step').textContent = done ? 'Clôture terminée ✔' : 'Étape 2 · Pose de la clôture';
+  const level = abs < 0.3 ? 'ok' : abs < 1 ? 'warn' : 'bad';
+  // Où est la clôture par rapport à l'avant du quad ? (cross > 0 : on est à droite de la ligne,
+  // donc elle est à gauche de son propre sens ; on rapporte cette direction au cap réel.)
+  const lineDir = bearingAt(prep, loc.along);
+  const rel = angleDiff(lineDir + (loc.cross > 0 ? -90 : 90), heading?.deg ?? lineDir);
+  const sector = ((Math.round(rel / 45) % 8) + 8) % 8;
+  $('steer').textContent = abs < 0.1 ? '✔ sur la ligne' : `${['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'][sector]} ${fmt1(abs)} m`;
+  $('steer').className = `steer small ${level}`;
+  $('steer-sub').textContent = abs < 0.1 ? '' : `La clôture est ${['devant', 'devant à droite', 'à droite', 'derrière à droite', 'derrière', 'derrière à gauche', 'à gauche', 'devant à gauche'][sector]}`;
+  $('st-left').textContent = formatLength(Math.max(0, prep.length - loc.along)); $('st-left-label').textContent = 'reste à poser';
+
+  // vue en perspective : orientée selon le cap ; sans cap connu, dans l'axe de la clôture
+  const canvas = $('persp'), dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (!w || !h) return;
+  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const lineBearing = bearingAt(prep, loc.along), view = heading?.deg ?? lineBearing;
+  const [ux, uy] = prep.proj.toXY(gps.last);
+  const cam = (xy) => toCameraFrame([xy[0] - ux, xy[1] - uy], view);
+  const b = (lineBearing * Math.PI) / 180;
+  const visible = drawScene(ctx, makeCamera({ width: w, height: h }), {
+    fence: prep.pts.map(cam),
+    origin: cam(prep.proj.toXY(pointAt(prep, loc.along))),
+    dir: toCameraFrame([Math.sin(b), Math.cos(b)], view),
+    along: loc.along, level,
+  });
+  if (!visible) {
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, h / 2 - 22, w, 44);
+    ctx.fillStyle = '#fff'; ctx.font = '600 16px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('Clôture hors de vue : tournez-vous vers elle', w / 2, h / 2);
+  }
 }
 
 function onPos(pos) {
   const c = pos.coords;
   gps.last = [c.longitude, c.latitude];
+  gps.accuracy = c.accuracy ?? 0;
+  if (c.heading != null && !Number.isNaN(c.heading) && (c.speed ?? 0) > 0.5) gps.course = { deg: c.heading, t: Date.now() };
   const ll = [c.latitude, c.longitude];
   me.setLatLng(ll).addTo(guideLayer);
-  const arrow = document.getElementById('me-arrow');
-  if (arrow) {
-    if (c.heading != null && !Number.isNaN(c.heading) && (c.speed ?? 0) > 0.5) { arrow.textContent = '⬆️'; arrow.style.transform = `rotate(${c.heading}deg)`; }
-    else { arrow.textContent = '🔵'; arrow.style.transform = ''; }
-  }
   const acc = c.accuracy == null ? '—' : c.accuracy < 1 ? `±${Math.round(c.accuracy * 100)} cm` : `±${fmt1(c.accuracy)} m`;
   $('st-acc').textContent = acc;
   $('st-acc').className = pos.quality ? `q-${pos.quality}` : '';
@@ -599,7 +681,14 @@ function onPos(pos) {
   update();
 }
 
+/** Boussole du téléphone : à lancer sur une action de l'utilisateur (autorisation sur iPhone). */
+async function startCompassOnce() {
+  if (gps.compass) return;
+  gps.compass = await startCompass((deg) => { gps.heading = { deg, t: Date.now() }; scheduleRender(); });
+}
+
 async function startGps() {
+  startCompassOnce();
   if ($('sim').checked) { toast('Mode simulation : cliquez sur la carte pour placer le quad.'); setGpsButton(true); return; }
   gps.centered = false;
   if (android) { android.start(); setGpsButton(true); return; }
@@ -614,12 +703,14 @@ function stopGps() {
   if (android) android.stop();
   if (gps.watch != null) navigator.geolocation.clearWatch(gps.watch);
   gps.watch = null; safe(() => gps.wake?.release()); gps.wake = null;
+  gps.compass?.stop(); gps.compass = null; gps.heading = null;
   setGpsButton(false);
 }
 function setGpsButton(on) { gps.on = on; $('btn-gps').textContent = on ? '■ Arrêter le GPS' : '▶ Démarrer le GPS'; }
 $('btn-gps').addEventListener('click', () => (gps.on ? stopGps() : startGps()));
 map.on('click', (e) => { if (state.mode === 'field' && $('sim').checked) { gps.centered = true; onPos({ coords: { latitude: e.latlng.lat, longitude: e.latlng.lng, accuracy: 2, heading: null, speed: 0 } }); } });
 document.addEventListener('visibilitychange', async () => { if (!document.hidden && gps.on && gps.watch != null) safe(async () => { gps.wake = await navigator.wakeLock?.request('screen'); }); });
+window.addEventListener('resize', scheduleRender);
 
 // ---------------------------------------------------------------- RTK natif (application Android)
 window.fmNative = {
@@ -645,8 +736,8 @@ function setMode(mode) {
   $('tab-design').classList.toggle('active', design); $('tab-field').classList.toggle('active', !design);
   $('panel-design').classList.toggle('hidden', !design); $('panel-field').classList.toggle('hidden', design);
   map.pm.disableDraw(); map.pm.disableGlobalEditMode(); map.pm.disableGlobalDragMode?.(); map.pm.disableGlobalRemovalMode?.();
-  if (design) { map.pm.addControls(GEOMAN_CONTROLS); guideLayer.clearLayers(); targetPoly = null; }
-  else { map.pm.removeControls(); fillLineSelect(); gps.prepKey = ''; drawTarget(); if (gps.last) update(); }
+  if (design) { map.pm.addControls(GEOMAN_CONTROLS); guideLayer.clearLayers(); }
+  else { map.pm.removeControls(); fillLineSelect(); resetGuidance(); drawTarget(); if (gps.last) update(); }
   setTimeout(() => map.invalidateSize(), 50);
 }
 $('tab-design').addEventListener('click', () => setMode('design'));
@@ -836,7 +927,7 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) sessi
 
 refresh(false);
 const ready = boot().catch((e) => { console.error(e); toast('Erreur au démarrage du stockage.'); });
-window.__fm = { map, drawn, refLayer, state, gps, register, refresh, onPos, setMode, L, ready, syncLayer, get session() { return session; }, get backend() { return backend; } }; // utile pour les tests
+window.__fm = { setHeading: (deg) => { gps.heading = deg == null ? null : { deg, t: Infinity }; render(); }, map, drawn, refLayer, state, gps, register, refresh, onPos, setMode, L, ready, syncLayer, get session() { return session; }, get backend() { return backend; } }; // utile pour les tests
 
 if (import.meta.env.PROD && !android && 'serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js').catch(() => {});

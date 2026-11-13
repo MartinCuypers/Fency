@@ -68,10 +68,7 @@
       <div id="strip-list" class="info"></div>
 
       <h3>3. Matériel (Kiwitech)</h3>
-      <div class="grid two">
-        <label>Espacement piquets (m)<input id="mat-spacing" type="number" min="2" step="1" value="10" inputmode="decimal" /></label>
-        <label>Nombre de fils<input id="mat-rows" type="number" min="1" step="1" value="1" inputmode="numeric" /></label>
-      </div>
+      <label>Nombre de fils<input id="mat-rows" type="number" min="1" step="1" value="1" inputmode="numeric" /></label>
       <div id="material" class="info"></div>
 
       <h3>Plan</h3>
@@ -105,17 +102,31 @@
       </div>
       <div id="rtk-status" class="info rtk-status"></div>
       <div id="guide" class="guide">
-        <div id="steer" class="steer">—</div>
-        <div id="steer-sub" class="steer-sub">Démarrez le GPS</div>
-        <div class="stats">
-          <div><span id="st-next">—</span><small>prochain piquet</small></div>
-          <div><span id="st-left">—</span><small>reste sur la ligne</small></div>
-          <div><span id="st-acc">—</span><small id="st-acc-label">précision GPS</small></div>
+        <div class="row guide-head">
+          <b id="guide-step">Démarrez le GPS</b>
+          <button id="btn-phase" hidden></button>
         </div>
-        <div class="row postrow">
-          <button id="btn-post-prev">◀</button>
-          <div class="postcount">Piquet <b id="post-idx">1</b> / <span id="post-total">—</span></div>
-          <button id="btn-post-next" class="primary">Posé ✓</button>
+        <!-- Étape 1 : rejoindre le départ de la clôture -->
+        <div id="approach" class="approach" hidden>
+          <svg id="approach-arrow" viewBox="-50 -50 100 100" aria-hidden="true">
+            <circle r="46" fill="none" stroke="currentColor" stroke-width="3" opacity="0.25" />
+            <path d="M0,-40 L26,22 L0,8 L-26,22 Z" fill="currentColor" />
+          </svg>
+          <div>
+            <div id="approach-dist" class="steer">—</div>
+            <div id="approach-sub" class="steer-sub"></div>
+          </div>
+        </div>
+        <!-- Étape 2 : pose, vue en perspective -->
+        <div id="lay" hidden>
+          <canvas id="persp"></canvas>
+          <div id="steer" class="steer small">—</div>
+          <div id="steer-sub" class="steer-sub"></div>
+        </div>
+        <div class="stats">
+          <div><span id="st-left">—</span><small id="st-left-label">reste sur la ligne</small></div>
+          <div><span id="st-heading">—</span><small id="st-heading-label">cap</small></div>
+          <div><span id="st-acc">—</span><small id="st-acc-label">précision GPS</small></div>
         </div>
       </div>
     </div>

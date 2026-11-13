@@ -39,13 +39,24 @@ button.danger { color:var(--warn); }
 .stats div { background:#f6f8f6; border-radius:8px; padding:8px 4px; }
 .stats span { display:block; font-size:22px; font-weight:700; font-variant-numeric:tabular-nums; }
 .stats small { color:var(--muted); font-size:11px; }
-.postrow { justify-content:space-between; flex-wrap:nowrap; }
-.postrow button { min-width:84px; min-height:54px; font-size:18px; }
-.postcount { font-size:17px; }
+.guide-head { justify-content:space-between; flex-wrap:nowrap; }
+.guide-head b { font-size:17px; text-align:left; }
+.guide-head button { flex:none; padding:7px 10px; font-size:14px; }
+/* étape 1 : flèche vers le départ et distance */
+.approach { display:flex; align-items:center; justify-content:center; gap:18px; padding:8px 0; }
+.approach[hidden] { display:none; }
+#approach-arrow { width:min(36vw, 160px); height:min(36vw, 160px); color:var(--green2); flex:none; transition:transform .2s linear; }
+.approach .steer { font-size:min(15vw, 84px); margin:0; }
+/* étape 2 : vue en perspective */
+#persp { display:block; width:100%; height:min(34dvh, 300px); border-radius:10px; background:#3f6b34; }
+.steer.small { font-size:min(11vw, 54px); margin-top:6px; }
+@media (max-width: 819px) { #panel-field { max-height:70dvh; } }
 
 #toast { position:fixed; left:50%; bottom:calc(48dvh + 8px); transform:translateX(-50%); background:rgba(0,0,0,.8); color:#fff; padding:8px 14px; border-radius:20px; font-size:14px; opacity:0; transition:opacity .25s; pointer-events:none; z-index:2000; max-width:90vw; text-align:center; }
 #toast.show { opacity:1; }
-.quad-icon { font-size:26px; line-height:1; text-align:center; filter:drop-shadow(0 0 2px #fff); transition:transform .3s; }
+.quad-icon { line-height:0; filter:drop-shadow(0 0 2px rgba(0,0,0,.5)); }
+#me-arrow { transition:transform .2s linear; }
+#me-arrow .me-dir { display:none; } #me-arrow.has-heading .me-dir { display:inline; } #me-arrow.has-heading .me-dot { display:none; }
 .post-label { background:#fff; border:1px solid #333; border-radius:3px; padding:0 4px; font-size:11px; }
 .leaflet-tooltip.strip-tip { font-size:12px; padding:2px 6px; }
 

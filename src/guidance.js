@@ -41,17 +41,50 @@ export function pointAt(line, s) {
   return line.proj.toLL([ax + t * (bx - ax), ay + t * (by - ay)]);
 }
 
-/** Distances (m) des piquets le long de la ligne, extrémité finale comprise. */
-export function postPositions(length, spacing) {
-  const out = [];
-  for (let s = 0; s < length - spacing * 0.25; s += spacing) out.push(s);
-  out.push(length);
-  return out;
+/** Estimation de matériel pour un ensemble de lignes : longueur de clôture et de fil. */
+export function estimateMaterial(lengths, { rows = 1 } = {}) {
+  const total = lengths.reduce((s, l) => s + l, 0);
+  return { total, wire: total * rows };
 }
 
-/** Estimation de matériel pour un ensemble de lignes. */
-export function estimateMaterial(lengths, { spacing = 10, rows = 1 } = {}) {
-  const total = lengths.reduce((s, l) => s + l, 0);
-  const posts = lengths.reduce((s, l) => s + postPositions(l, spacing).length, 0);
-  return { total, posts, wire: total * rows };
+/** Distance (m) et cap (0 = nord, sens horaire) depuis une position vers le départ de la ligne. */
+export function toStart(line, ll) {
+  const [x, y] = line.proj.toXY(ll); // le départ est l'origine du repère de la ligne
+  return { dist: Math.hypot(x, y), bearing: (Math.atan2(-x, -y) * 180 / Math.PI + 360) % 360 };
+}
+
+/** Cap de la ligne (sens de pose) à la distance `along` de son départ. */
+export function bearingAt(line, along) {
+  let i = 0;
+  while (i < line.pts.length - 2 && line.cum[i + 1] <= along) i++;
+  const [ax, ay] = line.pts[i], [bx, by] = line.pts[i + 1];
+  return (Math.atan2(bx - ax, by - ay) * 180 / Math.PI + 360) % 360;
+}
+
+/**
+ * Guidage en deux étapes.
+ *   'approach' : rejoindre le départ de la clôture (flèche et distance) ;
+ *   'lay'      : poser la clôture en restant sur la ligne ;
+ *   'done'     : arrivée au bout.
+ * @param {string|null} phase  étape courante (null : à déterminer)
+ * @param {{distStart: number, cross: number, along: number, length: number, accuracy?: number}} s
+ */
+export function nextPhase(phase, { distStart, cross, along, length, accuracy = 0 }) {
+  // rayon d'arrivée : au moins 3 m, élargi quand le GPS est imprécis (sans dépasser 8 m)
+  const reach = Math.min(8, Math.max(3, accuracy * 1.5));
+  if (phase == null) {
+    // au lancement : déjà engagé le long de la clôture -> on reprend la pose là où l'on est
+    const engaged = Math.abs(cross) <= reach && along > 1 && along < length - 1;
+    return engaged || distStart <= reach ? 'lay' : 'approach';
+  }
+  if (phase === 'approach') return distStart <= reach ? 'lay' : 'approach';
+  if (phase === 'lay') return along >= length - 0.3 && Math.abs(cross) <= reach ? 'done' : 'lay';
+  return phase;
+}
+
+/** Extrémité la plus proche d'une position : vrai s'il vaut mieux partir de la fin de la ligne. */
+export function nearerEndIsLast(coords, ll) {
+  const proj = makeProjection(ll);
+  const d = (c) => Math.hypot(...proj.toXY(c));
+  return d(coords[coords.length - 1]) < d(coords[0]);
 }

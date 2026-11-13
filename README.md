@@ -9,13 +9,16 @@ Application web / smartphone (PWA installable) pour **concevoir et poser des cl�
 - Parcelles : dessin (polygone/rectangle), ou création en cliquant un polygone d'une couche de référence WFS (RPG de l'IGN) ; fusion de parcelles voisines (les espaces de moins de 5 m sont comblés) et découpe par un trait.
 - Clôtures dessinées à la main (lignes), accrochage aux sommets.
 - Génération de clôtures de subdivision parallèles, par largeur de bande (m) ou par surface (ares), pour tout type de forme de champ ; direction réglable ou alignée sur le plus long côté ; choix du côté de départ ; clôture du périmètre en option.
-- Surface de chaque bande, longueur totale, nombre de piquets et longueur de fil estimés.
+- Surface de chaque bande, longueur totale de clôture et de fil estimées.
 - Plusieurs plans nommés, enregistrés automatiquement ; export / import GeoJSON.
 - Stockage et authentification modulables (local par défaut, Firebase, autre hébergeur) pour le travail collaboratif : voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 **Terrain (sur le quad)**
-- Choix d'une clôture (ou la plus proche automatiquement), puis guidage GPS : grande flèche d'écart latéral (gauche / droite), distance au prochain piquet, longueur restante, précision GPS.
-- Compteur de piquets posés, écran maintenu allumé, fonctionnement hors ligne pour les zones déjà affichées.
+- Choix d'une clôture (ou la plus proche automatiquement), puis guidage en deux étapes :
+  1. **Rejoindre le départ** : flèche de direction et distance jusqu'à l'extrémité la plus proche (inversable).
+  2. **Poser la clôture** : vue en perspective du sol devant le quad, avec la clôture et un quadrillage de 1 m gradué, l'écart à la ligne et la longueur restante.
+- Orientation par la boussole du téléphone (à plat, incliné sur un support, portrait ou paysage) ; à défaut, direction de déplacement donnée par le GPS.
+- Écran maintenu allumé, fonctionnement hors ligne pour les zones déjà affichées.
 - Mode « Simuler » (clic sur la carte) pour tester sans GPS.
 
 ## Application Android avec correction RTK
@@ -62,5 +65,7 @@ Pour une précision de 2 à 5 cm sur le quad, associer un récepteur RTK Bluetoo
 
 - `src/geo.js` : projection locale, surfaces, longueurs
 - `src/generate.js` : découpage d'un champ en bandes
-- `src/guidance.js` : écart latéral, piquets, estimation de matériel
+- `src/guidance.js` : écart latéral, étapes du guidage, estimation de matériel
+- `src/compass.js` : cap du téléphone à partir des capteurs d'orientation
+- `src/perspective.js` : vue en perspective (projection, quadrillage, clôture)
 - `src/main.js` : carte et interface
