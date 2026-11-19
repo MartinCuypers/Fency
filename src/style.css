@@ -117,6 +117,9 @@ input[type=url], input[type=search], input[type=text] { font-size:16px; padding:
 body.mode-design #toast { bottom:56px; }
 .map-info { position:fixed; left:50%; transform:translateX(-50%); bottom:calc(12px + env(safe-area-inset-bottom)); z-index:1000; background:rgba(255,255,255,.94); border-radius:16px; padding:5px 12px; font-size:13px; box-shadow:0 1px 5px rgba(0,0,0,.3); max-width:calc(100vw - 24px); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; pointer-events:none; }
 .map-info:empty, body.mode-field .map-info { display:none; }
+.map-info.renamable { pointer-events:auto; cursor:pointer; }
+.map-info .info-name { font-weight:600; }
+.map-info .info-name.empty { font-weight:400; color:var(--muted); font-style:italic; }
 
 /* Barre d'outils de la carte (src/toolbar.js), en blocs, dans le style de Geoman */
 .fency-toolbar { display:flex; flex-direction:column; gap:8px; }

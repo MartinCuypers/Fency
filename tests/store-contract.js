@@ -53,6 +53,14 @@ export function runStoreContract(name, makePair) {
     assert.equal(l1.properties.kind, 'line');
     assert.ok(l1.properties.updatedAt > 0);
 
+    // nom d'un élément : conservé, puis retiré
+    await a.putFeature(p.id, { ...field('f1'), properties: { id: 'f1', kind: 'field', name: 'Les Grands Prés' } });
+    ({ features } = await a.loadPlan(p.id));
+    assert.equal(features.find((f) => f.properties.id === 'f1').properties.name, 'Les Grands Prés');
+    await a.putFeature(p.id, field('f1'));
+    ({ features } = await a.loadPlan(p.id));
+    assert.equal(features.find((f) => f.properties.id === 'f1').properties.name, undefined);
+
     await a.deleteFeature(p.id, 'f1');
     ({ features } = await a.loadPlan(p.id));
     assert.deepEqual(features.map((f) => f.properties.id), ['l1']);

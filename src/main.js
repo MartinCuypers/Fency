@@ -95,6 +95,7 @@ const ringOf = (layer) => {
 };
 const isField = (l) => l instanceof L.Polygon;
 const kindOf = (l) => (isField(l) ? 'field' : 'line');
+const nameOf = (l) => l.feature?.properties?.name ?? '';
 const fields = () => drawn.getLayers().filter(isField);
 const userLines = () => drawn.getLayers().filter((l) => !isField(l) && l instanceof L.Polyline);
 const currentField = () => (state.selected && drawn.hasLayer(state.selected) ? state.selected : fields().slice(-1)[0] || null);
@@ -123,9 +124,13 @@ let session = null;       // session de travail (créée au démarrage)
 const featureOf = (layer) => layer.toGeoJSON(8); // 8 décimales ≈ 1 mm (le guidage RTK est centimétrique)
 const syncLayer = (layer) => { if (!applying) session?.putFeature(featureOf(layer)); };
 
-function register(layer, id = uid()) {
+/**
+ * Enregistre un objet dessiné. `props` : propriétés venues du stockage ou d'un import
+ * (seul le nom est repris ; id et type sont recalculés).
+ */
+function register(layer, id = uid(), props = {}) {
   const kind = isField(layer) ? 'field' : 'line';
-  layer.feature = { type: 'Feature', properties: { id, kind }, geometry: null };
+  layer.feature = { type: 'Feature', properties: { id, kind, ...(props.name ? { name: String(props.name) } : {}) }, geometry: null };
   byId.set(id, layer);
   if (!drawn.hasLayer(layer)) drawn.addLayer(layer);
   // en Conception, la sélection passe par un clic sur la carte (voir pickAt)
@@ -158,9 +163,9 @@ drawn.on('layerremove', (e) => {
 
 // ---------------------------------------------------------------- parcelles : créer, fusionner, couper
 /** Ajoute une parcelle à partir d'un contour [[lon, lat], …] et l'enregistre. */
-function addField(ring) {
+function addField(ring, props = {}) {
   const layer = L.polygon(ring.map(([lng, lat]) => [lat, lng])).addTo(map);
-  register(layer); syncLayer(layer);
+  register(layer, uid(), props); syncLayer(layer);
   return layer;
 }
 
@@ -172,7 +177,10 @@ async function mergeSelected() {
   if (!res) return toast('Fusion impossible : ces parcelles sont séparées de plus de 5 m.');
   setTool(null);
   layers.forEach((l) => drawn.removeLayer(l));
-  select([addField(res.ring)]);
+  // la parcelle fusionnée garde le premier nom trouvé ; « X (1) » + « X (2) » redonnent « X »
+  const names = layers.map(nameOf).filter(Boolean), bases = new Set(names.map((n) => n.replace(/ \(\d+\)$/, '')));
+  const name = bases.size === 1 && names.length === layers.length ? [...bases][0] : names[0];
+  select([addField(res.ring, { name })]);
   refresh();
   toast(res.bridged ? 'Parcelles fusionnées (espace entre elles comblé).' : 'Parcelles fusionnées.');
 }
@@ -184,7 +192,8 @@ async function cutField(field, line) {
   const pieces = splitParcel(ringOf(field), line);
   if (!pieces.length) return toast('Le trait doit traverser la parcelle de part en part.');
   drawn.removeLayer(field);
-  const layers = pieces.map(addField);
+  const name = nameOf(field); // les morceaux reprennent le nom, numéroté
+  const layers = pieces.map((ring, i) => addField(ring, { name: name && `${name} (${i + 1})` }));
   select([layers[0]]);
   refresh();
   toast(`Parcelle coupée en ${pieces.length}.`);
@@ -386,13 +395,26 @@ function updateToolbar() {
   const sel = selected();
   let info = '';
   if (kind === 'field' && sel.length === 1) {
-    const r = ringOf(sel[0]);
-    info = `Parcelle : <b>${formatArea(areaLL(r))}</b> · périmètre ${formatLength(lengthLL([...r, r[0]]))}`;
+    const r = ringOf(sel[0]), name = nameOf(sel[0]);
+    info = `<span class="info-name${name ? '' : ' empty'}">${escapeHtml(name || 'Parcelle sans nom')} ✎</span> · <b>${formatArea(areaLL(r))}</b> · périmètre ${formatLength(lengthLL([...r, r[0]]))}`;
   } else if (kind === 'field') info = `${sel.length} parcelles : <b>${formatArea(sel.reduce((t, l) => t + areaLL(ringOf(l)), 0))}</b>`;
   else if (kind === 'line') info = `${sel.length > 1 ? `${sel.length} clôtures` : 'Clôture'} : <b>${formatLength(sel.reduce((t, l) => t + lengthLL(ringOf(l)), 0))}</b>`;
   else if (kind === 'marks') info = `Repères virtuels : <b>${state.strips.length} bandes</b>`;
   $('field-info').innerHTML = info;
+  $('field-info').classList.toggle('renamable', kind === 'field' && sel.length === 1);
 }
+
+/** Clic sur la pastille du bas : renommer la parcelle sélectionnée. */
+$('field-info').addEventListener('click', () => {
+  const sel = selected();
+  if (selKind() !== 'field' || sel.length !== 1) return;
+  const layer = sel[0];
+  const name = prompt('Nom de la parcelle :', nameOf(layer));
+  if (name == null) return; // annulé
+  const clean = name.trim();
+  if (clean) layer.feature.properties.name = clean; else delete layer.feature.properties.name;
+  syncLayer(layer); refresh();
+});
 
 // ---------------------------------------------------------------- couche de référence (WFS)
 const REF_MIN_ZOOM = 14;
@@ -653,7 +675,7 @@ function loadFeatures(fc, { keepIds = false } = {}) {
   let n = 0;
   for (const [f, l] of layers) {
     if (!(l instanceof L.Polyline)) continue;
-    register(l, keepIds && f.properties?.id ? f.properties.id : uid());
+    register(l, keepIds && f.properties?.id ? f.properties.id : uid(), f.properties ?? {});
     syncLayer(l); n++;
   }
   return n;
