@@ -12,6 +12,11 @@ import L from 'leaflet';
 export function createToolbar(map, blocks, { position = 'topleft' } = {}) {
   const buttons = new Map(); // id -> élément .button-container
   const blockEls = new Map(); // id -> élément du bloc
+  let allowed = blocks.map((b) => b.id); // blocs affichables (voir showBlocks)
+  // un bloc est masqué s'il n'est pas affichable ou si aucun de ses boutons n'est visible
+  const layout = () => {
+    for (const [id, el] of blockEls) el.hidden = !allowed.includes(id) || !el.querySelector('.button-container:not([hidden])');
+  };
 
   const Control = L.Control.extend({
     onAdd() {
@@ -50,7 +55,9 @@ export function createToolbar(map, blocks, { position = 'topleft' } = {}) {
     setDisabled(id, on) { buttons.get(id)?.classList.toggle('disabled', !!on); },
     /** Petit compteur sur un bouton ('' pour l'effacer). */
     setBadge(id, text) { const el = buttons.get(id)?.querySelector('.fency-badge'); if (el) el.textContent = text ?? ''; },
+    /** Affiche ou masque un bouton (le bloc disparaît s'il n'a plus de bouton visible). */
+    setVisible(id, on) { const el = buttons.get(id); if (el && el.hidden === !!on) { el.hidden = !on; layout(); } },
     /** N'affiche que les blocs donnés. */
-    showBlocks(ids) { for (const [id, el] of blockEls) el.hidden = !ids.includes(id); },
+    showBlocks(ids) { allowed = ids; layout(); },
   };
 }

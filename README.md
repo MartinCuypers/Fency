@@ -4,7 +4,7 @@ Application web / smartphone (PWA installable) pour **concevoir et poser des cl�
 
 ## Fonctions
 
-**Conception (sur ordinateur ou téléphone)** : tout se fait depuis la barre d'outils de la carte, en cinq blocs (Cartographie, Parcelles, Repères virtuels, Clôtures, Plan) ; les réglages s'ouvrent dans des fenêtres.
+**Conception (sur ordinateur ou téléphone)** : tout se fait depuis la barre d'outils de la carte, en cinq blocs (Cartographie, Parcelles, Repères virtuels, Clôtures, Plan) ; les réglages s'ouvrent dans des fenêtres. Par défaut, un clic sélectionne l'objet visé (en priorité un point, puis une ligne, puis la plus petite surface ; Maj/Ctrl + clic pour en ajouter) et la barre n'affiche que les outils utilisables sur la sélection.
 - Fonds de carte : satellite IGN, Esri, plan OSM, Sentinel-2 (indice SAVI, via Sentinel Hub).
 - Parcelles : dessin (polygone), ou création en cliquant un polygone d'une couche de référence WFS (RPG de l'IGN) ; fusion de parcelles voisines (les espaces de moins de 5 m sont comblés) et découpe par un trait.
 - Clôtures dessinées à la main (lignes), accrochage aux sommets.

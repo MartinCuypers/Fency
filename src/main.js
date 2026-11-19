@@ -73,8 +73,9 @@ map.createPane('reference').style.zIndex = 350;  // couche de référence : sous
 // ---------------------------------------------------------------- état
 const state = {
   mode: 'design',
-  selected: null,           // champ sélectionné
-  multi: new Set(),         // champs cochés pour une fusion
+  selected: null,           // dernière parcelle sélectionnée (sert à la génération)
+  sel: new Set(),           // objets sélectionnés (tous du même type : parcelles ou clôtures)
+  selMarks: false,          // repères virtuels sélectionnés (ils forment un tout)
   genActive: false,
   genLines: [],             // clôtures générées {coords,length,label}
   strips: [],
@@ -93,22 +94,25 @@ const ringOf = (layer) => {
   return ll.map((p) => [p.lng, p.lat]);
 };
 const isField = (l) => l instanceof L.Polygon;
+const kindOf = (l) => (isField(l) ? 'field' : 'line');
 const fields = () => drawn.getLayers().filter(isField);
 const userLines = () => drawn.getLayers().filter((l) => !isField(l) && l instanceof L.Polyline);
 const currentField = () => (state.selected && drawn.hasLayer(state.selected) ? state.selected : fields().slice(-1)[0] || null);
+const selected = () => [...state.sel].filter((l) => drawn.hasLayer(l));
+/** Type de la sélection : 'field', 'line', 'marks' ou null. */
+const selKind = () => (state.selMarks ? 'marks' : selected()[0] ? kindOf(selected()[0]) : null);
 
 const STYLE = {
   field: { color: '#ffeb3b', weight: 3, fillColor: '#ffeb3b', fillOpacity: 0.08 },
   fieldSel: { color: '#ff9800', weight: 4, fillColor: '#ff9800', fillOpacity: 0.12 },
-  fieldMulti: { color: '#e040fb', weight: 4, fillColor: '#e040fb', fillOpacity: 0.2 },
   line: { color: '#00e5ff', weight: 4 },
+  lineSel: { color: '#2979ff', weight: 7 },
 };
 
 function styleDrawn() {
-  const cur = currentField();
-  drawn.eachLayer((l) => l.setStyle(!isField(l) ? STYLE.line : state.multi.has(l) ? STYLE.fieldMulti : l === cur ? STYLE.fieldSel : STYLE.field));
-  const n = [...state.multi].filter((l) => drawn.hasLayer(l)).length;
-  toolbar?.setBadge('merge', n ? String(n) : '');
+  drawn.eachLayer((l) => l.setStyle(isField(l) ? (state.sel.has(l) ? STYLE.fieldSel : STYLE.field) : (state.sel.has(l) ? STYLE.lineSel : STYLE.line)));
+  generated.eachLayer((l) => l.setStyle({ weight: state.selMarks ? 6 : l.options.baseWeight }));
+  updateToolbar();
 }
 
 // Chaque élément dessiné porte un identifiant stable : c'est l'unité d'enregistrement
@@ -124,19 +128,8 @@ function register(layer, id = uid()) {
   layer.feature = { type: 'Feature', properties: { id, kind }, geometry: null };
   byId.set(id, layer);
   if (!drawn.hasLayer(layer)) drawn.addLayer(layer);
-  layer.on('click', (e) => {
-    if (state.mode === 'field' && kind === 'line') return pickLine(`u:${L.stamp(layer)}`);
-    if (state.mode !== 'design') return;
-    if (tool === `remove:${kind}`) { L.DomEvent.stop(e); drawn.removeLayer(layer); return; }
-    if (kind !== 'field') return;
-    const o = e.originalEvent;
-    if (tool === 'merge' || o?.ctrlKey || o?.shiftKey || o?.metaKey) {
-      // sélection multiple (outil Fusion, ou Ctrl/Maj + clic) : pour fusionner
-      if (tool !== 'merge') setTool('merge');
-      if (state.multi.has(layer)) state.multi.delete(layer); else state.multi.add(layer);
-    } else { state.multi.clear(); state.selected = layer; }
-    styleDrawn(); refresh(false);
-  });
+  // en Conception, la sélection passe par un clic sur la carte (voir pickAt)
+  layer.on('click', () => { if (state.mode === 'field' && kind === 'line') pickLine(`u:${L.stamp(layer)}`); });
   ['pm:edit', 'pm:dragend', 'pm:vertexadded', 'pm:vertexremoved'].forEach((ev) => layer.on(ev, () => { syncLayer(layer); refresh(); }));
   applyTool(layer, tool);
   styleDrawn();
@@ -150,11 +143,11 @@ map.on('pm:create', (e) => {
   }
   register(e.layer);
   syncLayer(e.layer);
-  if (isField(e.layer)) state.selected = e.layer;
+  select([e.layer]);
   refresh();
 });
 drawn.on('layerremove', (e) => {
-  state.multi.delete(e.layer);
+  state.sel.delete(e.layer);
   const id = e.layer.feature?.properties?.id;
   if (id && byId.get(id) === e.layer) {
     byId.delete(id);
@@ -172,14 +165,14 @@ function addField(ring) {
 }
 
 async function mergeSelected() {
-  const layers = [...state.multi].filter((l) => drawn.hasLayer(l));
+  const layers = selected().filter(isField);
   if (layers.length < 2) return;
   const { mergeParcels } = await import('./parcels.js');
   const res = mergeParcels(layers.map(ringOf));
   if (!res) return toast('Fusion impossible : ces parcelles sont séparées de plus de 5 m.');
   setTool(null);
   layers.forEach((l) => drawn.removeLayer(l));
-  state.selected = addField(res.ring);
+  select([addField(res.ring)]);
   refresh();
   toast(res.bridged ? 'Parcelles fusionnées (espace entre elles comblé).' : 'Parcelles fusionnées.');
 }
@@ -192,55 +185,142 @@ async function cutField(field, line) {
   if (!pieces.length) return toast('Le trait doit traverser la parcelle de part en part.');
   drawn.removeLayer(field);
   const layers = pieces.map(addField);
-  state.selected = layers[0];
+  select([layers[0]]);
   refresh();
   toast(`Parcelle coupée en ${pieces.length}.`);
 }
 
+// ---------------------------------------------------------------- sélection (Conception)
+// Par défaut, un clic sur la carte sélectionne l'objet visé, quel que soit son type. S'il y en a
+// plusieurs sous le clic : d'abord un objet ponctuel, puis une ligne, puis la plus petite surface.
+// Ctrl/Maj + clic ajoute à la sélection (objets du même type).
+const HIT_PX = 14; // tolérance de clic autour des points et des lignes (en pixels écran)
+
+function distToSegment(p, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
+  const t = len2 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2)) : 0;
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+function distToLine(pt, layer) {
+  const pts = ringOf(layer).map(([lng, lat]) => map.latLngToContainerPoint([lat, lng]));
+  let d = Infinity;
+  for (let i = 1; i < pts.length; i++) d = Math.min(d, distToSegment(pt, pts[i - 1], pts[i]));
+  return d;
+}
+function insideRing([x, y], ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/** Objet visé par un clic : { layer } pour un objet dessiné, { marks: true } pour les repères, ou null. */
+function hitTest(latlng) {
+  const pt = map.latLngToContainerPoint(latlng);
+  // 1. objets ponctuels (électrificateurs, à venir)
+  const points = drawn.getLayers().filter((l) => l instanceof L.Marker)
+    .map((l) => ({ l, d: pt.distanceTo(map.latLngToContainerPoint(l.getLatLng())) })).filter((c) => c.d <= HIT_PX);
+  if (points.length) return { layer: points.sort((a, b) => a.d - b.d)[0].l };
+  // 2. lignes : clôtures dessinées, puis repères virtuels
+  const lines = userLines().map((l) => ({ l, d: distToLine(pt, l) })).filter((c) => c.d <= HIT_PX);
+  if (lines.length) return { layer: lines.sort((a, b) => a.d - b.d)[0].l };
+  if (generated.getLayers().some((l) => distToLine(pt, l) <= HIT_PX)) return { marks: true };
+  // 3. surfaces : la plus petite qui contient le point
+  const ll = [latlng.lng, latlng.lat];
+  const surf = fields().filter((l) => insideRing(ll, ringOf(l))).map((l) => ({ l, a: areaLL(ringOf(l)) }));
+  if (surf.length) return { layer: surf.sort((a, b) => a.a - b.a)[0].l };
+  return null;
+}
+
+/** Remplace la sélection. */
+function select(layers = [], { marks = false } = {}) {
+  state.sel = new Set(layers);
+  state.selMarks = marks;
+  const f = layers.find(isField);
+  if (f) state.selected = f;
+  if (tool && !TOOL_KEEPS_SELECTION.has(tool)) setTool(null);
+  refresh(false);
+}
+
+map.on('click', (e) => {
+  if (state.mode !== 'design') return;
+  const hit = hitTest(e.latlng), o = e.originalEvent;
+  if (tool === 'merge') { // on complète la sélection de parcelles à fusionner
+    if (hit?.layer && isField(hit.layer)) {
+      if (state.sel.has(hit.layer)) state.sel.delete(hit.layer); else state.sel.add(hit.layer);
+      state.selected = hit.layer; refresh(false);
+    }
+    return;
+  }
+  if (tool === 'edit:field' || tool === 'edit:line' || tool === 'drag:field' || tool === 'drag:line') {
+    if (!hit) select([]); // clic dans le vide : fin de la modification
+    return;
+  }
+  if (tool) return; // dessin, découpe, couche de référence : la carte appartient à l'outil
+  if (!hit) return select([]);
+  if (hit.marks) return select([], { marks: true });
+  if ((o?.ctrlKey || o?.shiftKey || o?.metaKey) && selKind() === kindOf(hit.layer)) {
+    const next = new Set(state.sel);
+    if (next.has(hit.layer)) next.delete(hit.layer); else next.add(hit.layer);
+    return select([...next]);
+  }
+  select([hit.layer]);
+});
+
+function deleteSelection() {
+  const layers = selected();
+  if (!layers.length) return;
+  select([]);
+  layers.forEach((l) => drawn.removeLayer(l));
+  toast(layers.length > 1 ? `${layers.length} objets supprimés.` : 'Objet supprimé.');
+}
+
 // ---------------------------------------------------------------- barre d'outils (Conception)
-// Un seul outil actif à la fois. Les modes Modifier / Déplacer / Supprimer ne visent qu'un type
-// d'objet (parcelles ou clôtures) : on les active objet par objet plutôt qu'en mode global Geoman.
-const kindOf = (l) => (isField(l) ? 'field' : 'line');
+// Un seul outil actif à la fois. Modifier / Déplacer / Supprimer agissent sur la sélection :
+// on active Geoman objet par objet plutôt qu'en mode global.
 const DRAW_TOOLS = { polygon: 'Polygon', line: 'Line', cut: 'Line' };
+const TOOL_KEEPS_SELECTION = new Set(['merge']);
 const TOOL_HINTS = {
   polygon: 'Cliquez les sommets de la parcelle, puis le premier point pour la fermer.',
   line: 'Cliquez les points de la clôture, puis à nouveau le dernier point pour terminer.',
   cut: 'Tracez le trait de coupe à travers la parcelle, puis terminez sur le dernier point.',
-  merge: 'Cliquez les parcelles à fusionner, puis à nouveau sur Fusionner.',
-  'edit:field': 'Déplacez les sommets des parcelles.',
-  'edit:line': 'Déplacez les points des clôtures.',
-  'drag:field': 'Faites glisser une parcelle pour la déplacer.',
-  'drag:line': 'Faites glisser une clôture pour la déplacer.',
-  'remove:field': 'Cliquez une parcelle pour la supprimer.',
-  'remove:line': 'Cliquez une clôture pour la supprimer.',
+  merge: 'Cliquez les autres parcelles à fusionner, puis à nouveau sur Fusionner.',
+  reference: 'Cliquez un polygone de la couche de référence pour créer une parcelle.',
+  'edit:field': 'Déplacez les sommets de la parcelle.',
+  'edit:line': 'Déplacez les points de la clôture.',
+  'drag:field': 'Faites glisser la parcelle pour la déplacer.',
+  'drag:line': 'Faites glisser la clôture pour la déplacer.',
 };
 
-/** Met un objet dans l'état voulu par l'outil (édition des sommets, déplacement). */
+/** Met un objet dans l'état voulu par l'outil (édition des sommets, déplacement) : seulement s'il est sélectionné. */
 function applyTool(layer, t) {
   if (!layer.pm) return;
-  const kind = kindOf(layer);
-  if (t === `edit:${kind}`) layer.pm.enable({ snappable: true }); else if (layer.pm.enabled()) layer.pm.disable();
-  if (t === `drag:${kind}`) layer.pm.enableLayerDrag(); else if (layer.pm.layerDragEnabled?.()) layer.pm.disableLayerDrag();
+  const kind = kindOf(layer), mine = state.sel.has(layer);
+  if (mine && t === `edit:${kind}`) layer.pm.enable({ snappable: true }); else if (layer.pm.enabled()) layer.pm.disable();
+  if (mine && t === `drag:${kind}`) layer.pm.enableLayerDrag(); else if (layer.pm.layerDragEnabled?.()) layer.pm.disableLayerDrag();
 }
 
-/** Active un outil ; le même outil une seconde fois, ou null, revient à la navigation. */
+/** Active un outil ; le même outil une seconde fois, ou null, revient à la sélection. */
 function setTool(next) {
   const prev = tool;
   if (next === prev) next = null;
-  if (next === 'cut' && !currentField()) { toast('Sélectionnez d\'abord une parcelle.'); next = null; }
   tool = next;
   if (DRAW_TOOLS[prev]) { cutting = null; map.pm.disableDraw(); }
-  if (prev === 'merge' && next !== 'merge') state.multi.clear();
+  if (next === 'polygon' || next === 'line' || next === 'reference') { state.sel.clear(); state.selMarks = false; }
   drawn.eachLayer((l) => applyTool(l, next));
-  if (next === 'cut') { cutting = currentField(); state.selected = cutting; }
+  if (next === 'cut') cutting = selected().find(isField) ?? null;
   if (DRAW_TOOLS[next]) map.pm.enableDraw(DRAW_TOOLS[next], { snappable: true });
-  for (const id of Object.keys(TOOL_HINTS)) toolbar?.setActive(id, id === tool);
-  map.getContainer().classList.toggle('tool-remove', !!tool?.startsWith('remove:'));
+  map.getContainer().classList.toggle('tool-reference', tool === 'reference');
   if (tool) toast(TOOL_HINTS[tool]);
   styleDrawn();
 }
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && tool && !document.querySelector('dialog[open]')) setTool(null); });
-// tracé terminé ou abandonné : on revient à la navigation
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || document.querySelector('dialog[open]')) return;
+  if (tool) setTool(null); else select([]);
+});
+// tracé terminé ou abandonné : on revient à la sélection
 map.on('pm:drawend', () => setTimeout(() => {
   if (DRAW_TOOLS[tool] && !map.pm.globalDrawModeEnabled()) { cutting = null; setTool(null); }
 }, 0));
@@ -252,6 +332,7 @@ function locateMe() {
     () => toast('Position refusée ou indisponible.'), { enableHighAccuracy: true, timeout: 15000 });
 }
 
+const openTool = (dialogId) => () => { setTool(null); openDialog(dialogId); };
 toolbar = createToolbar(map, [
   { id: 'map', title: 'Cartographie', color: '#1565c0', buttons: [
     { id: 'zoom-in', title: 'Zoom avant', text: '+', onClick: () => map.zoomIn() },
@@ -260,28 +341,58 @@ toolbar = createToolbar(map, [
     { id: 'basemap', title: 'Fond de carte', text: '🗺️', onClick: () => { renderBasemaps(); openDialog('dlg-basemap'); } },
   ] },
   { id: 'fields', title: 'Parcelles', color: '#f9a825', buttons: [
-    { id: 'reference', title: 'Couche de référence (créer une parcelle en cliquant un polygone)', text: '▦', onClick: () => { setTool(null); openDialog('dlg-reference'); } },
+    { id: 'reference', title: 'Créer depuis la couche de référence', text: '▦', onClick: () => (tool === 'reference' ? setTool(null) : openTool('dlg-reference')()) },
     { id: 'polygon', title: 'Dessiner une parcelle', icon: 'polygon', onClick: () => setTool('polygon') },
-    { id: 'merge', title: 'Fusionner des parcelles', text: '⧉', onClick: () => (tool === 'merge' && state.multi.size >= 2 ? mergeSelected() : setTool('merge')) },
-    { id: 'cut', title: 'Couper la parcelle sélectionnée', icon: 'cut', onClick: () => setTool('cut') },
-    { id: 'edit:field', title: 'Modifier les parcelles', icon: 'edit', onClick: () => setTool('edit:field') },
-    { id: 'drag:field', title: 'Déplacer une parcelle', icon: 'drag', onClick: () => setTool('drag:field') },
-    { id: 'remove:field', title: 'Supprimer une parcelle', icon: 'delete', onClick: () => setTool('remove:field') },
+    { id: 'merge', title: 'Fusionner des parcelles', text: '⧉', onClick: () => (selected().length >= 2 ? mergeSelected() : setTool('merge')) },
+    { id: 'cut', title: 'Couper la parcelle', icon: 'cut', onClick: () => setTool('cut') },
+    { id: 'edit:field', title: 'Modifier la parcelle', icon: 'edit', onClick: () => setTool('edit:field') },
+    { id: 'drag:field', title: 'Déplacer la parcelle', icon: 'drag', onClick: () => setTool('drag:field') },
+    { id: 'remove:field', title: 'Supprimer la sélection', icon: 'delete', onClick: deleteSelection },
   ] },
   { id: 'marks', title: 'Repères virtuels', color: '#e53935', buttons: [
-    { id: 'generate', title: 'Générer les repères', text: '▤', onClick: () => { setTool(null); openDialog('dlg-generate'); } },
+    { id: 'generate', title: 'Générer les repères', text: '▤', onClick: openTool('dlg-generate') },
     { id: 'clear-gen', title: 'Supprimer les repères', icon: 'delete', onClick: clearGenerated },
   ] },
   { id: 'fences', title: 'Clôtures', color: '#00acc1', buttons: [
     { id: 'line', title: 'Dessiner une clôture', icon: 'polyline', onClick: () => setTool('line') },
-    { id: 'edit:line', title: 'Modifier les clôtures', icon: 'edit', onClick: () => setTool('edit:line') },
-    { id: 'drag:line', title: 'Déplacer une clôture', icon: 'drag', onClick: () => setTool('drag:line') },
-    { id: 'remove:line', title: 'Supprimer une clôture', icon: 'delete', onClick: () => setTool('remove:line') },
+    { id: 'edit:line', title: 'Modifier la clôture', icon: 'edit', onClick: () => setTool('edit:line') },
+    { id: 'drag:line', title: 'Déplacer la clôture', icon: 'drag', onClick: () => setTool('drag:line') },
+    { id: 'remove:line', title: 'Supprimer la sélection', icon: 'delete', onClick: deleteSelection },
   ] },
   { id: 'plan', title: 'Plan', color: '#2e7d32', buttons: [
-    { id: 'plan', title: 'Plans : ouvrir, partager, exporter…', text: '📁', onClick: () => { setTool(null); openDialog('dlg-plan'); } },
+    { id: 'plan', title: 'Plans : ouvrir, partager, exporter…', text: '📁', onClick: openTool('dlg-plan') },
   ] },
 ]);
+
+/**
+ * N'affiche que les outils utilisables : ceux de création toujours, ceux qui agissent sur un objet
+ * seulement quand la sélection s'y prête. Pendant un outil, on garde son bouton (pour en sortir).
+ */
+function updateToolbar() {
+  if (!toolbar) return;
+  const kind = selKind(), n = selected().length;
+  const show = {
+    reference: true, polygon: true, line: true, generate: fields().length > 0,
+    merge: kind === 'field',
+    cut: kind === 'field' && n === 1,
+    'edit:field': kind === 'field' && n === 1, 'drag:field': kind === 'field' && n === 1, 'remove:field': kind === 'field',
+    'edit:line': kind === 'line' && n === 1, 'drag:line': kind === 'line' && n === 1, 'remove:line': kind === 'line',
+    'clear-gen': kind === 'marks',
+  };
+  for (const [id, on] of Object.entries(show)) toolbar.setVisible(id, on || tool === id);
+  for (const id of Object.keys(show)) toolbar.setActive(id, id === tool);
+  toolbar.setBadge('merge', tool === 'merge' || n >= 2 ? String(n) : '');
+  // infos de la sélection, en bas de la carte
+  const sel = selected();
+  let info = '';
+  if (kind === 'field' && sel.length === 1) {
+    const r = ringOf(sel[0]);
+    info = `Parcelle : <b>${formatArea(areaLL(r))}</b> · périmètre ${formatLength(lengthLL([...r, r[0]]))}`;
+  } else if (kind === 'field') info = `${sel.length} parcelles : <b>${formatArea(sel.reduce((t, l) => t + areaLL(ringOf(l)), 0))}</b>`;
+  else if (kind === 'line') info = `${sel.length > 1 ? `${sel.length} clôtures` : 'Clôture'} : <b>${formatLength(sel.reduce((t, l) => t + lengthLL(ringOf(l)), 0))}</b>`;
+  else if (kind === 'marks') info = `Repères virtuels : <b>${state.strips.length} bandes</b>`;
+  $('field-info').innerHTML = info;
+}
 
 // ---------------------------------------------------------------- couche de référence (WFS)
 const REF_MIN_ZOOM = 14;
@@ -293,10 +404,10 @@ const refLayer = L.geoJSON(null, {
     layer.on('mouseover', () => layer.setStyle({ weight: 3, fillOpacity: 0.25 }));
     layer.on('mouseout', () => refLayer.resetStyle(layer));
     layer.on('click', (e) => {
-      if (state.mode !== 'design' || tool) return;
+      if (state.mode !== 'design' || tool !== 'reference') return;
       L.DomEvent.stopPropagation(e);
       const field = addField(outerRingAt(feature, [e.latlng.lng, e.latlng.lat]));
-      state.multi.clear(); state.selected = field;
+      state.sel = new Set([field]); state.selected = field;
       refresh();
       const crop = feature.properties?.code_cultu ? ` (culture ${feature.properties.code_cultu})` : '';
       toast(`Parcelle créée : ${formatArea(areaLL(ringOf(field)))}${crop}.`);
@@ -471,7 +582,7 @@ function regenerate() {
   for (const gl of state.genLines) {
     const isPerim = gl.id.startsWith('p');
     const pl = L.polyline(gl.coords.map(([lng, lat]) => [lat, lng]), {
-      color: isPerim ? '#ffa726' : '#ff5252', weight: isPerim ? 3 : 4, dashArray: isPerim ? '2 6' : '10 6', pmIgnore: true,
+      color: isPerim ? '#ffa726' : '#ff5252', weight: isPerim ? 3 : 4, baseWeight: isPerim ? 3 : 4, dashArray: isPerim ? '2 6' : '10 6', pmIgnore: true,
     }).addTo(generated);
     pl.bindTooltip(`${gl.label} · ${formatLength(gl.length)}`, { sticky: true, className: 'strip-tip' });
     pl.on('click', () => { if (state.mode === 'field') pickLine(gl.id); });
@@ -489,12 +600,9 @@ function allLines() {
 
 // ---------------------------------------------------------------- panneaux d'infos
 function refresh(save = true) {
-  styleDrawn();
   regenerate();
-  const f = currentField();
-  $('field-info').innerHTML = f
-    ? `Parcelle : <b>${formatArea(areaLL(ringOf(f)))}</b> · périmètre ${formatLength(lengthLL([...ringOf(f), ringOf(f)[0]]))}${fields().length > 1 ? ` <small>(${fields().length} parcelles)</small>` : ''}`
-    : '';
+  if (!state.genLines.length) state.selMarks = false;
+  styleDrawn();
   $('strip-list').innerHTML = state.strips.length
     ? `<table>${state.strips.map((s) => `<tr><td>Bande ${s.index}</td><td>${formatArea(s.area)}</td></tr>`).join('')}</table>`
     : '';
@@ -520,9 +628,15 @@ $('btn-generate').addEventListener('click', () => {
 });
 function clearGenerated() {
   setTool(null);
+  state.selMarks = false;
   if (!state.genActive) return toast('Aucun repère à supprimer.');
   state.genActive = false; refresh(); toast('Repères supprimés.');
 }
+$('btn-ref-use').addEventListener('click', () => {
+  if (!ref.spec) return toast('Choisissez d\'abord une couche.');
+  $('dlg-reference').close(); setTool('reference');
+  if (map.getZoom() < REF_MIN_ZOOM) toast('Zoomez sur vos parcelles pour afficher la couche.');
+});
 $('btn-align').addEventListener('click', () => {
   const f = currentField(); if (!f) return toast('Dessinez d\'abord un champ.');
   $('gen-angle').value = longestEdgeBearing(ringOf(f)); refresh();
@@ -576,6 +690,7 @@ $('file-import').addEventListener('change', async (e) => {
 $('btn-reset').addEventListener('click', () => {
   if (!confirm('Tout effacer (parcelles, clôtures et repères) ?')) return;
   $('dlg-plan').close(); setTool(null);
+  state.sel.clear(); state.selMarks = false;
   drawn.clearLayers(); state.selected = null; state.genActive = false; refresh();
 });
 
@@ -836,6 +951,7 @@ const sessionUi = {
   applyPlan(meta, features) {
     applying = true;
     try {
+      state.sel.clear(); state.selMarks = false; setTool(null);
       drawn.clearLayers(); byId.clear(); state.selected = null;
       applyParams(meta.params); state.genActive = !!meta.genActive;
       loadFeatures({ type: 'FeatureCollection', features }, { keepIds: true });
@@ -849,7 +965,7 @@ const sessionUi = {
     refresh(false); showPlanName();
   },
   upsertFeature(feature) {
-    const id = feature.properties.id, old = byId.get(id), wasSelected = old && state.selected === old;
+    const id = feature.properties.id, old = byId.get(id), wasSelected = old && state.selected === old, wasInSel = old && state.sel.has(old);
     applying = true;
     try {
       if (old) drawn.removeLayer(old);
@@ -857,6 +973,7 @@ const sessionUi = {
       loadFeatures({ type: 'FeatureCollection', features: [feature] }, { keepIds: true });
     } finally { applying = false; }
     if (wasSelected) state.selected = byId.get(id);
+    if (wasInSel && byId.get(id)) { state.sel.add(byId.get(id)); applyTool(byId.get(id), tool); }
     refresh(false);
   },
   removeFeature(id) {
@@ -1015,7 +1132,7 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) sessi
 
 refresh(false);
 const ready = boot().catch((e) => { console.error(e); toast('Erreur au démarrage du stockage.'); });
-window.__fm = { setHeading: (deg) => { gps.heading = deg == null ? null : { deg, t: Infinity }; render(); }, map, drawn, refLayer, state, gps, register, refresh, onPos, setMode, L, ready, syncLayer, get session() { return session; }, get backend() { return backend; } }; // utile pour les tests
+window.__fm = { hitTest, generated, setHeading: (deg) => { gps.heading = deg == null ? null : { deg, t: Infinity }; render(); }, map, drawn, refLayer, state, gps, register, refresh, onPos, setMode, L, ready, syncLayer, get session() { return session; }, get backend() { return backend; } }; // utile pour les tests
 
 if (import.meta.env.PROD && !android && 'serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js').catch(() => {});
