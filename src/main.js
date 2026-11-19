@@ -4,7 +4,7 @@ import '@geoman-io/leaflet-geoman-free';
 import '@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css';
 import './style.css';
 import { areaLL, lengthLL, longestEdgeBearing, formatArea, formatLength } from './geo.js';
-import { generateStrips } from './generate.js';
+import { generateGrid, paddockOf, fitPaddock, L_FENCE } from './generate.js';
 import { prepareLine, locate, pointAt, toStart, bearingAt, nextPhase, nearerEndIsLast } from './guidance.js';
 import { startCompass, angleDiff } from './compass.js';
 import { makeCamera, toCameraFrame, drawScene } from './perspective.js';
@@ -385,7 +385,7 @@ toolbar = createToolbar(map, [
     { id: 'remove:obstacle', title: 'Supprimer la sélection', icon: 'delete', onClick: deleteSelection },
   ] },
   { id: 'marks', title: 'Repères virtuels', color: '#e53935', buttons: [
-    { id: 'generate', title: 'Générer les repères', text: '▤', onClick: openTool('dlg-generate') },
+    { id: 'generate', title: 'Repères : réglages en direct', text: '▤', onClick: () => openMarksPanel() },
     { id: 'clear-gen', title: 'Supprimer les repères', icon: 'delete', onClick: clearGenerated },
   ] },
   { id: 'fences', title: 'Clôtures', color: '#00acc1', buttons: [
@@ -442,7 +442,7 @@ function updateToolbar() {
     'clear-gen': kind === 'marks',
   };
   for (const [id, on] of Object.entries(show)) toolbar.setVisible(id, on || tool === id);
-  for (const id of Object.keys(show)) toolbar.setActive(id, id === tool);
+  for (const id of Object.keys(show)) toolbar.setActive(id, id === tool || (id === 'generate' && !$('panel-marks').hidden));
   toolbar.setBadge('merge', tool === 'merge' || n >= 2 ? String(n) : '');
   // infos de la sélection, en bas de la carte
   const sel = selected();
@@ -457,7 +457,10 @@ function updateToolbar() {
     info = `${sel.length} ${kind === 'field' ? 'parcelles' : 'obstacles'} : <b>${formatArea(sel.reduce((t, l) => t + areaLL(ringOf(l)), 0))}</b>`;
   }
   else if (isFence) info = `${sel.length} clôtures ${kind === 'line' ? 'temporaires' : 'permanentes'} : <b>${formatLength(sel.reduce((t, l) => t + lengthLL(ringOf(l)), 0))}</b>`;
-  else if (kind === 'marks') info = `Repères virtuels : <b>${state.strips.length} bandes</b>`;
+  else if (kind === 'marks') {
+    const nSec = state.genLines.filter((g) => g.id[0] === 's').length;
+    info = `Repères virtuels : <b>${state.strips.length} bandes</b>${nSec ? ` · ${nSec} lignes secondaires` : ''}`;
+  }
   $('field-info').innerHTML = info;
   $('field-info').classList.toggle('renamable', !!renamable);
 }
@@ -633,42 +636,100 @@ $('btn-cat-manual').addEventListener('click', () => {
   if (ref.spec) { $('ref-layer').value = ref.spec.id; scheduleReference(); }
 }
 
-// ---------------------------------------------------------------- génération
+// ---------------------------------------------------------------- génération (repères virtuels)
+const num = (id, dflt = 0) => { const v = parseFloat($(id).value); return Number.isFinite(v) ? v : dflt; };
 const params = () => ({
   mode: $('gen-mode').value,
-  value: parseFloat($('gen-value').value) || 0,
+  value: num('gen-value'),
   angle: parseInt($('gen-angle').value, 10),
   reverse: $('gen-reverse').checked,
   perimeter: $('gen-perimeter').checked,
+  offset: num('gen-offset'),
+  sec: {
+    on: $('sec-on').checked, mode: $('sec-mode').value, value: num('sec-value'),
+    angle: parseInt($('sec-angle').value, 10), offset: num('sec-offset'),
+  },
 });
+
+/**
+ * Quadrillage demandé : espacement a des lignes principales (null en mode surface), espacement b
+ * des secondaires, angle entre les deux familles. `problem` explique pourquoi il manque quelque chose.
+ */
+function gridOf(p) {
+  const a = p.mode === 'width' && p.value > 0 ? p.value : null;
+  if (!p.sec.on) return { a, b: null };
+  const between = p.sec.angle - p.angle, sin = Math.abs(Math.sin(between * Math.PI / 180));
+  if (sin < 0.05) return { a, b: null, between, problem: 'Les lignes secondaires sont presque parallèles aux principales.' };
+  if (p.sec.mode === 'width') return { a, b: p.sec.value > 0 ? p.sec.value : null, between };
+  // surface de paddock : l'espacement des secondaires découle de celui des principales
+  if (!a) return { a, b: null, between, problem: 'La surface de paddock demande des lignes principales espacées en mètres.' };
+  return { a, b: (p.sec.value * 100 * sin) / a, between };
+}
+
+const MARK_STYLE = {
+  g: { color: '#ff5252', weight: 4, dashArray: '10 6' },  // lignes principales
+  s: { color: '#ffb300', weight: 3, dashArray: '6 6' },   // lignes secondaires
+  p: { color: '#ffa726', weight: 3, dashArray: '2 6' },   // périmètre
+};
 
 function regenerate() {
   generated.clearLayers();
   state.genLines = []; state.strips = [];
   const field = currentField();
   if (!state.genActive || !field) return;
-  const p = params();
+  const p = params(), grid = gridOf(p);
   const ring = ringOf(field);
-  const res = generateStrips(ring, {
-    bearing: p.angle, mode: p.mode, reverse: p.reverse, holes: obstacles().map(ringOf),
-    value: p.mode === 'area' ? p.value * 100 : p.value,
+  const res = generateGrid(ring, {
+    holes: obstacles().map(ringOf),
+    primary: { bearing: p.angle, mode: p.mode, reverse: p.reverse, offset: p.mode === 'width' ? p.offset : 0, value: p.mode === 'area' ? p.value * 100 : p.value },
+    secondary: grid.b ? { bearing: p.sec.angle, mode: 'width', value: grid.b, offset: p.sec.offset } : null,
   });
   state.strips = res.strips;
   res.lines.forEach((l, i) => state.genLines.push({ id: `g:${i}`, coords: l.coords, length: l.length, label: `Repère ${l.strip}` }));
+  res.secondary.forEach((l, i) => state.genLines.push({ id: `s:${i}`, coords: l.coords, length: l.length, label: `Repère secondaire ${l.strip}` }));
   if (p.perimeter) {
     const closed = [...ring, ring[0]];
     state.genLines.push({ id: 'p:0', coords: closed, length: lengthLL(closed), label: 'Repère du périmètre' });
   }
   for (const gl of state.genLines) {
-    const isPerim = gl.id.startsWith('p');
+    const st = MARK_STYLE[gl.id[0]];
     const pl = L.polyline(gl.coords.map(([lng, lat]) => [lat, lng]), {
-      color: isPerim ? '#ffa726' : '#ff5252', weight: isPerim ? 3 : 4, baseWeight: isPerim ? 3 : 4, dashArray: isPerim ? '2 6' : '10 6',
+      ...st, baseWeight: st.weight,
       // pas éditables par Geoman, mais accrochables quand on trace ou modifie une clôture
       pmIgnore: true, snapIgnore: !SNAP_TO_MARKS.has(tool),
     }).addTo(generated);
     pl.bindTooltip(`${gl.label} · ${formatLength(gl.length)}`, { sticky: true, className: 'strip-tip' });
   }
 }
+
+/** Panneau des repères : valeurs affichées, bornes des décalages, paddock et clôture en L. */
+function renderMarksPanel() {
+  const p = params(), grid = gridOf(p), f = currentField();
+  $('gen-angle-val').textContent = `${p.angle}°`;
+  $('sec-angle-val').textContent = `${p.sec.angle}°`;
+  $('gen-offset-box').hidden = p.mode !== 'width';
+  $('gen-offset').max = Math.max(1, p.value || 1);
+  $('gen-offset-val').textContent = `${num('gen-offset')} m`;
+  $('sec-offset').max = Math.max(1, Math.round(grid.b ?? p.sec.value) || 1);
+  $('sec-offset-val').textContent = `${num('sec-offset')} m`;
+  $('sec-box').hidden = !p.sec.on;
+  $('marks-field').innerHTML = f
+    ? `Parcelle : <b>${escapeHtml(nameOf(f) || 'sans nom')}</b> · ${formatArea(areaLL(ringOf(f)))}`
+    : 'Sélectionnez ou dessinez d\'abord une parcelle.';
+  let info = '';
+  if (grid.problem) info = `<span class="warn-text">${grid.problem}</span>`;
+  else if (grid.a && grid.b) {
+    const pad = paddockOf(grid.a, grid.b, grid.between), ok = Math.abs(pad.lFence - L_FENCE) < 0.5;
+    info = `Paddock : <b>${fmtM(grid.a)} × ${fmtM(grid.b)} m</b> · ${formatArea(pad.area)}<br>
+      Clôture en L : <b class="${ok ? 'ok-text' : 'warn-text'}">${fmtM(pad.lFence)} m</b> ${ok ? '✔' : `(${pad.lFence > L_FENCE ? 'plus' : 'moins'} que ${L_FENCE} m)`}
+      ${ok ? '' : `<div class="row"><button id="btn-fit-l">Ajuster pour une L de ${L_FENCE} m</button></div>`}`;
+  } else if (p.sec.on && !grid.a) info = '<span class="hint">Le paddock et la clôture en L se calculent quand les lignes principales sont espacées en mètres.</span>';
+  $('grid-info').innerHTML = info;
+  $('strip-list').innerHTML = state.strips.length && !p.sec.on
+    ? `<table>${state.strips.map((s) => `<tr><td>Bande ${s.index}</td><td>${formatArea(s.area)}</td></tr>`).join('')}</table>`
+    : '';
+}
+const fmtM = (v) => (Math.round(v * 10) / 10).toLocaleString('fr-FR');
 
 // ---------------------------------------------------------------- clôtures à poser (guidage)
 // Seules les clôtures dessinées servent au guidage : les repères virtuels n'aident qu'à les tracer.
@@ -684,31 +745,52 @@ function refresh(save = true) {
   regenerate();
   if (!state.genLines.length) state.selMarks = false;
   styleDrawn();
-  $('strip-list').innerHTML = state.strips.length
-    ? `<table>${state.strips.map((s) => `<tr><td>Bande ${s.index}</td><td>${formatArea(s.area)}</td></tr>`).join('')}</table>`
-    : '';
-  const p = params();
-  $('gen-angle-val').textContent = `${p.angle}°`;
+  renderMarksPanel();
   fillLineSelect();
   if (save && !applying) session?.saveMeta({ params: params(), genActive: state.genActive });
 }
 
-// ---------------------------------------------------------------- formulaire de génération
-$('gen-mode').addEventListener('change', () => {
-  const area = $('gen-mode').value === 'area';
-  $('gen-value-label').textContent = area ? 'Surface par bande (ares, 100 a = 1 ha)' : 'Largeur (m)';
-  $('gen-value').value = area ? 30 : 20;
+// ---------------------------------------------------------------- panneau des repères (en direct)
+const LABELS = {
+  gen: { width: 'Largeur (m)', area: 'Surface par bande (ares, 100 a = 1 ha)' },
+  sec: { width: 'Largeur (m)', paddock: 'Surface de paddock (ares, 100 a = 1 ha)' },
+};
+const setLabels = () => {
+  $('gen-value-label').textContent = LABELS.gen[$('gen-mode').value];
+  $('sec-value-label').textContent = LABELS.sec[$('sec-mode').value];
+};
+$('gen-mode').addEventListener('change', () => { $('gen-value').value = $('gen-mode').value === 'area' ? 30 : 20; setLabels(); refresh(); });
+$('sec-mode').addEventListener('change', () => { $('sec-value').value = 100; setLabels(); refresh(); });
+['gen-value', 'gen-angle', 'gen-reverse', 'gen-perimeter', 'gen-offset', 'sec-value', 'sec-angle', 'sec-offset']
+  .forEach((id) => $(id).addEventListener('input', () => refresh()));
+const perpendicular = () => { $('sec-angle').value = (parseInt($('gen-angle').value, 10) + 90) % 180; };
+$('sec-on').addEventListener('change', () => { if ($('sec-on').checked && !state.secTouched) perpendicular(); state.secTouched = true; refresh(); });
+$('btn-sec-perp').addEventListener('click', () => { perpendicular(); refresh(); });
+$('grid-info').addEventListener('click', (e) => {
+  if (e.target.id !== 'btn-fit-l') return;
+  // garde la surface du paddock, et trouve les espacements qui donnent une clôture en L de 280 m
+  const p = params(), grid = gridOf(p), pad = paddockOf(grid.a, grid.b, grid.between);
+  const { fit, maxArea } = fitPaddock(pad.area, grid.between, { near: grid.a });
+  if (!fit) return toast(`Paddock trop grand pour une clôture en L de ${L_FENCE} m (maximum ${formatArea(maxArea)}).`);
+  const sin = Math.abs(Math.sin(grid.between * Math.PI / 180));
+  $('gen-value').value = Math.round(fit.a * 10) / 10;
+  // en surface de paddock, la surface reste la consigne ; sinon on règle l'espacement des secondaires
+  if (p.sec.mode === 'width') $('sec-value').value = Math.round((L_FENCE * sin - Math.round(fit.a * 10) / 10) * 10) / 10;
   refresh();
 });
-['gen-value', 'gen-angle', 'gen-reverse', 'gen-perimeter'].forEach((id) => $(id).addEventListener('input', () => refresh()));
-$('btn-generate').addEventListener('click', () => {
-  if (!currentField()) return toast('Dessinez d\'abord une parcelle (polygone).');
-  state.genActive = true; refresh();
-  $('dlg-generate').close();
-  const f = currentField(); map.fitBounds(f.getBounds(), { padding: [30, 30], maxZoom: 19 });
-});
+
+function openMarksPanel(open = $('panel-marks').hidden) {
+  if (open && !currentField()) return toast('Dessinez d\'abord une parcelle (polygone).');
+  $('panel-marks').hidden = !open;
+  document.body.classList.toggle('marks-open', open);
+  if (open) { setTool(null); state.genActive = true; refresh(); }
+  toolbar.setActive('generate', open);
+  setTimeout(() => map.invalidateSize(), 50);
+}
+$('btn-marks-close').addEventListener('click', () => openMarksPanel(false));
 function clearGenerated() {
   setTool(null);
+  if (!$('panel-marks').hidden) openMarksPanel(false);
   state.selMarks = false;
   if (!state.genActive) return toast('Aucun repère à supprimer.');
   state.genActive = false; refresh(); toast('Repères supprimés.');
@@ -777,10 +859,19 @@ $('btn-reset').addEventListener('click', () => {
 
 function applyParams(p) {
   if (!p) return;
-  $('gen-mode').value = p.mode || 'width';
-  $('gen-value-label').textContent = p.mode === 'area' ? 'Surface par bande (ares, 100 a = 1 ha)' : 'Largeur (m)';
+  $('gen-mode').value = p.mode === 'area' ? 'area' : 'width';
   $('gen-value').value = p.value ?? 20; $('gen-angle').value = p.angle ?? 90;
   $('gen-reverse').checked = !!p.reverse; $('gen-perimeter').checked = p.perimeter !== false;
+  // bornes larges d'abord, sinon le curseur rognerait la valeur (elles sont recalculées ensuite)
+  $('gen-offset').max = $('sec-offset').max = 100000;
+  $('gen-offset').value = p.offset ?? 0;
+  const sec = p.sec ?? {};
+  $('sec-on').checked = !!sec.on; state.secTouched = !!sec.on || state.secTouched;
+  $('sec-mode').value = sec.mode === 'paddock' ? 'paddock' : 'width';
+  $('sec-value').value = sec.value ?? 100;
+  $('sec-angle').value = sec.angle ?? ((($('gen-angle').value | 0) + 90) % 180);
+  $('sec-offset').value = sec.offset ?? 0;
+  setLabels();
 }
 
 // ================================================================ MODE TERRAIN
@@ -1025,6 +1116,7 @@ function setMode(mode) {
   // en Terrain, seul le bloc Cartographie reste (zoom, position, fond de carte)
   toolbar.showBlocks(design ? ['map', 'fields', 'marks', 'fences', 'plan'] : ['map']);
   // les repères virtuels ne servent qu'en Conception
+  if (!design) openMarksPanel(false);
   if (design) { guideLayer.clearLayers(); generated.addTo(map); }
   else { generated.remove(); fillLineSelect(); resetGuidance(); drawTarget(); if (gps.last) update(); }
   setTimeout(() => map.invalidateSize(), 50);

@@ -42,9 +42,10 @@ function subtract(spans, holes) {
  * @param opts.value    largeur (m) ou surface (m²)
  * @param opts.reverse  balaye le champ en sens inverse (choix du côté de départ)
  * @param opts.holes    obstacles : anneaux [[lon,lat],...] exclus des bandes (surfaces et clôtures)
+ * @param opts.offset   décalage des lignes en mètres (mode 'width' seulement), dans le sens du balayage
  * @returns {lines:[{coords,length,strip}], strips:[{index,area}], totalArea} (surfaces hors obstacles)
  */
-export function generateStrips(ring, { bearing = 0, mode = 'width', value = 20, reverse = false, holes = [] } = {}) {
+export function generateStrips(ring, { bearing = 0, mode = 'width', value = 20, reverse = false, holes = [], offset = 0 } = {}) {
   const r = openRing(ring);
   if (r.length < 3 || !(value > 0)) return { lines: [], strips: [], totalArea: 0 };
   const proj = makeProjection(centroidLL(r));
@@ -79,7 +80,8 @@ export function generateStrips(ring, { bearing = 0, mode = 'width', value = 20, 
   if (mode === 'area') {
     for (let k = 1; k * value < cum[N] - 1; k++) cuts.push(vAtArea(k * value));
   } else {
-    for (let v = vmin + value; v < vmax - eps; v += value) cuts.push(v);
+    const o = ((offset % value) + value) % value; // décalage ramené dans [0, largeur)
+    for (let v = vmin + (o > eps ? o : value); v < vmax - eps; v += value) cuts.push(v);
   }
 
   const areaBelow = (v) => cum[Math.max(0, Math.min(N, Math.round((v - vmin) / dv)))];
@@ -95,4 +97,69 @@ export function generateStrips(ring, { bearing = 0, mode = 'width', value = 20, 
     }
   });
   return { lines, strips, totalArea: holesUV.length ? cum[N] : polygonAreaXY(xy) };
+}
+
+/** Longueur de la clôture en L qui ferme un paddock du quadrillage (fixée par l'enrouleur Kiwitech). */
+export const L_FENCE = 280;
+
+/**
+ * Quadrillage de repères : lignes principales et, en option, lignes secondaires d'une autre direction.
+ * Les croisements sont insérés comme sommets des lignes : ils deviennent des points d'accroche.
+ * @param primary   options de generateStrips pour les lignes principales
+ * @param secondary options de generateStrips pour les lignes secondaires (ou null)
+ * @returns {lines, strips, totalArea, secondary: [{coords,length,strip}]}
+ */
+export function generateGrid(ring, { primary, secondary = null, holes = [] }) {
+  const a = generateStrips(ring, { ...primary, holes });
+  if (!secondary) return { ...a, secondary: [] };
+  const b = generateStrips(ring, { ...secondary, holes });
+  const r = openRing(ring);
+  if (r.length >= 3) insertCrossings(a.lines, b.lines, makeProjection(centroidLL(r)));
+  return { ...a, secondary: b.lines };
+}
+
+/** Ajoute aux lignes (segments de 2 points) les points où elles se croisent. */
+function insertCrossings(as, bs, proj) {
+  const xyA = as.map((l) => l.coords.map(proj.toXY)), xyB = bs.map((l) => l.coords.map(proj.toXY));
+  const cutsA = as.map(() => []), cutsB = bs.map(() => []);
+  xyA.forEach(([p, p2], i) => xyB.forEach(([q, q2], j) => {
+    const rx = p2[0] - p[0], ry = p2[1] - p[1], sx = q2[0] - q[0], sy = q2[1] - q[1];
+    const den = rx * sy - ry * sx;
+    if (Math.abs(den) < 1e-9) return; // parallèles
+    const t = ((q[0] - p[0]) * sy - (q[1] - p[1]) * sx) / den, u = ((q[0] - p[0]) * ry - (q[1] - p[1]) * rx) / den;
+    if (t <= 1e-6 || t >= 1 - 1e-6 || u <= 1e-6 || u >= 1 - 1e-6) return;
+    const x = [p[0] + t * rx, p[1] + t * ry];
+    cutsA[i].push([t, x]); cutsB[j].push([u, x]);
+  }));
+  const rebuild = (lines, cuts) => lines.forEach((l, i) => {
+    if (!cuts[i].length) return;
+    const pts = cuts[i].sort((m, n) => m[0] - n[0]).map(([, x]) => proj.toLL(x));
+    l.coords = [l.coords[0], ...pts, l.coords[1]];
+  });
+  rebuild(as, cutsA); rebuild(bs, cutsB);
+}
+
+/**
+ * Paddocks d'un quadrillage : espacements a (entre lignes principales) et b (entre secondaires),
+ * angle entre les deux directions. Renvoie la surface d'un paddock et la longueur de la clôture en L.
+ */
+export function paddockOf(a, b, angleDeg) {
+  const s = Math.abs(Math.sin(angleDeg * Math.PI / 180)) || 1e-9;
+  return { area: (a * b) / s, lFence: (a + b) / s };
+}
+
+/**
+ * Espacements (a, b) donnant des paddocks de surface `area` (m²) fermés par une clôture en L de
+ * longueur `length`, pour un angle donné entre les familles. `near` : valeur de a souhaitée (choix
+ * de la solution). Renvoie null si la surface est trop grande, avec la surface maximale possible.
+ */
+export function fitPaddock(area, angleDeg, { length = L_FENCE, near = 0 } = {}) {
+  const s = Math.abs(Math.sin(angleDeg * Math.PI / 180));
+  if (s < 0.05) return { fit: null, maxArea: 0 };
+  const sum = length * s, prod = area * s, disc = sum * sum - 4 * prod;
+  const maxArea = (sum * sum) / (4 * s);
+  if (disc < 0 || !(area > 0)) return { fit: null, maxArea };
+  const r1 = (sum + Math.sqrt(disc)) / 2, r2 = (sum - Math.sqrt(disc)) / 2;
+  const a = Math.abs(r1 - near) <= Math.abs(r2 - near) ? r1 : r2;
+  return { fit: { a, b: sum - a }, maxArea };
 }

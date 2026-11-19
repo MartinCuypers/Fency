@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeProjection, areaLL, lengthLL, longestEdgeBearing } from '../src/geo.js';
-import { generateStrips } from '../src/generate.js';
+import { generateStrips, generateGrid, paddockOf, fitPaddock } from '../src/generate.js';
 import { prepareLine, locate, pointAt, estimateMaterial, toStart, bearingAt, nextPhase, nearerEndIsLast } from '../src/guidance.js';
 import { headingFromOrientation, angleDiff, smoothAngle } from '../src/compass.js';
 import { makeCamera, toCameraFrame } from '../src/perspective.js';
@@ -66,6 +66,39 @@ test('obstacles qui se chevauchent ou dépassent du champ', () => {
   const g = generateStrips(rect, { bearing: 90, mode: 'width', value: 20, holes: [a, b, out] });
   const at20 = g.lines.filter((l) => l.strip === 1).map((l) => Math.round(l.length)).sort((x, y) => x - y);
   assert.deepEqual(at20, [40, 50]); // 0-50 et 110-150 (a et b réunis : 50-110)
+});
+
+test('décalage des lignes (mode largeur)', () => {
+  const g = generateStrips(rect, { bearing: 90, mode: 'width', value: 20, offset: 5 });
+  const ys = g.lines.map((l) => Math.round(p.toXY(l.coords[0])[1]));
+  assert.deepEqual(ys, [5, 25, 45, 65, 85]);
+  const h = generateStrips(rect, { bearing: 90, mode: 'width', value: 20, offset: 45 }); // ramené à 5
+  assert.equal(h.lines.length, 5);
+});
+
+test('quadrillage : lignes secondaires et croisements insérés comme sommets', () => {
+  const g = generateGrid(rect, { primary: { bearing: 90, value: 25 }, secondary: { bearing: 0, value: 50 } });
+  assert.equal(g.lines.length, 3);      // y = 25, 50, 75
+  assert.equal(g.secondary.length, 3);  // x = 50, 100, 150
+  for (const l of g.lines) assert.equal(l.coords.length, 5); // 2 extrémités + 3 croisements
+  for (const l of g.secondary) assert.equal(l.coords.length, 5);
+  const [x, y] = p.toXY(g.lines[0].coords[1]);
+  assert.ok(Math.abs(x - 50) < 0.01 && Math.abs(y - 25) < 0.01);
+});
+
+test('paddock et clôture en L de 280 m', () => {
+  assert.deepEqual(paddockOf(100, 180, 90), { area: 18000, lFence: 280 });
+  const { fit } = fitPaddock(18000, 90, { near: 90 });
+  assert.ok(Math.abs(fit.a - 100) < 1e-6 && Math.abs(fit.b - 180) < 1e-6);
+  const other = fitPaddock(18000, 90, { near: 170 }).fit; // l'autre solution
+  assert.ok(Math.abs(other.a - 180) < 1e-6);
+  const big = fitPaddock(20000, 90); // > 140 x 140 m
+  assert.equal(big.fit, null);
+  assert.equal(Math.round(big.maxArea), 19600);
+  // angle non droit : L = (a + b) / sin
+  const oblique = fitPaddock(10000, 60).fit;
+  assert.ok(Math.abs(paddockOf(oblique.a, oblique.b, 60).lFence - 280) < 1e-6);
+  assert.ok(Math.abs(paddockOf(oblique.a, oblique.b, 60).area - 10000) < 1e-6);
 });
 
 test('sens inverse : la première bande part de l\'autre côté', () => {

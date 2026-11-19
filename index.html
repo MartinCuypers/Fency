@@ -68,6 +68,60 @@
     </div>
   </section>
 
+  <!-- Conception : réglages des repères virtuels, à côté de la carte (mise à jour en direct) -->
+  <aside id="panel-marks" class="side-panel" hidden>
+    <div class="side-head"><b>Repères virtuels</b><button id="btn-marks-close" title="Fermer">✕</button></div>
+    <div class="side-body">
+      <p id="marks-field" class="hint"></p>
+      <div id="grid-info" class="info"></div>
+      <h3>Lignes principales</h3>
+      <div class="grid">
+        <label>Espacement
+          <select id="gen-mode">
+            <option value="width">largeur de bande (m)</option>
+            <option value="area">surface par bande (ares)</option>
+          </select>
+        </label>
+        <label><span id="gen-value-label">Largeur (m)</span>
+          <input id="gen-value" type="number" min="1" step="any" value="20" inputmode="decimal" />
+        </label>
+        <label>Direction : <b id="gen-angle-val">90°</b>
+          <input id="gen-angle" type="range" min="0" max="179" step="1" value="90" />
+        </label>
+        <div class="row">
+          <button id="btn-align">Aligner sur le plus long côté</button>
+          <label class="check"><input id="gen-reverse" type="checkbox" /> Départ côté opposé</label>
+        </div>
+        <label id="gen-offset-box">Décalage : <b id="gen-offset-val">0 m</b>
+          <input id="gen-offset" type="range" min="0" max="20" step="0.5" value="0" />
+        </label>
+        <label class="check"><input id="gen-perimeter" type="checkbox" checked /> Inclure le périmètre</label>
+      </div>
+
+      <h3><label class="check"><input id="sec-on" type="checkbox" /> Lignes secondaires</label></h3>
+      <div id="sec-box" class="grid" hidden>
+        <label>Espacement
+          <select id="sec-mode">
+            <option value="width">largeur (m)</option>
+            <option value="paddock">surface de paddock (ares)</option>
+          </select>
+        </label>
+        <label><span id="sec-value-label">Largeur (m)</span>
+          <input id="sec-value" type="number" min="1" step="any" value="100" inputmode="decimal" />
+        </label>
+        <label>Direction : <b id="sec-angle-val">0°</b>
+          <input id="sec-angle" type="range" min="0" max="179" step="1" value="0" />
+        </label>
+        <div class="row"><button id="btn-sec-perp">Perpendiculaire aux principales</button></div>
+        <label>Décalage : <b id="sec-offset-val">0 m</b>
+          <input id="sec-offset" type="range" min="0" max="100" step="0.5" value="0" />
+        </label>
+      </div>
+
+      <div id="strip-list" class="info"></div>
+    </div>
+  </aside>
+
   <dialog id="dlg-basemap">
     <h3>Fond de carte</h3>
     <div id="basemap-list" class="choice-list"></div>
@@ -80,34 +134,6 @@
     <span class="row nowrap"><select id="ref-layer"></select><button id="btn-layers" title="Ajouter une couche du serveur">＋ Couches</button></span>
     <div id="ref-status" class="hint"></div>
     <div class="row"><button id="btn-ref-use" class="primary">Créer des parcelles</button><button data-close>Fermer</button></div>
-  </dialog>
-
-  <dialog id="dlg-generate">
-    <h3>Repères virtuels</h3>
-    <div class="grid">
-      <label>Découpage par
-        <select id="gen-mode">
-          <option value="width">largeur de bande (m)</option>
-          <option value="area">surface par bande (ares)</option>
-        </select>
-      </label>
-      <label><span id="gen-value-label">Largeur (m)</span>
-        <input id="gen-value" type="number" min="1" step="1" value="20" inputmode="decimal" />
-      </label>
-      <label>Direction : <b id="gen-angle-val">90°</b>
-        <input id="gen-angle" type="range" min="0" max="179" step="1" value="90" />
-      </label>
-      <div class="row">
-        <button id="btn-align">Aligner sur le plus long côté</button>
-        <label class="check"><input id="gen-reverse" type="checkbox" /> Départ côté opposé</label>
-      </div>
-      <label class="check"><input id="gen-perimeter" type="checkbox" checked /> Inclure le périmètre</label>
-    </div>
-    <div id="strip-list" class="info"></div>
-    <div class="row">
-      <button id="btn-generate" class="primary">Générer</button>
-      <button data-close>Fermer</button>
-    </div>
   </dialog>
 
   <dialog id="dlg-plan">

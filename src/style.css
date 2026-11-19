@@ -141,3 +141,24 @@ body.mode-design #toast { bottom:56px; }
 button.choice { text-align:left; }
 button.choice.current { background:#eef5ee; border-color:var(--green2); font-weight:600; }
 #dlg-plan .grid button { width:100%; }
+
+/* Panneau latéral des repères (Conception) : en bas sur téléphone, à droite sur grand écran */
+.side-panel { background:var(--bg); border-top:1px solid var(--line); max-height:45dvh; overflow-y:auto; z-index:1000; padding-bottom:env(safe-area-inset-bottom); }
+.side-panel[hidden] { display:none; }
+.side-head { position:sticky; top:0; background:var(--bg); display:flex; justify-content:space-between; align-items:center; padding:8px 14px; border-bottom:1px solid var(--line); z-index:1; }
+.side-head b { color:var(--green); font-size:15px; }
+.side-head button { padding:4px 10px; }
+.side-body { padding:6px 14px 14px; }
+.side-body h3 { margin-top:16px; }
+.side-body h3 label.check { color:var(--green); font-size:15px; font-weight:600; }
+.grid[hidden], label[hidden] { display:none; }
+.ok-text { color:var(--ok); } .warn-text { color:#ef6c00; }
+@media (max-width: 819px) {
+  body.marks-open .map-info { display:none; }
+  body.marks-open #toast { bottom:calc(45dvh + 8px); }
+}
+@media (min-width: 820px) {
+  body.mode-design.marks-open { grid-template-columns:minmax(0, 1fr) 340px; }
+  .side-panel { grid-column:2; grid-row:2; max-height:none; border-top:0; border-left:1px solid var(--line); }
+  body.marks-open #toast, body.marks-open .map-info { left:calc(50% - 170px); }
+}
