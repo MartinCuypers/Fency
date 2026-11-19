@@ -94,6 +94,17 @@ export function drawScene(ctx, cam, scene) {
     }
   }
 
+  // repères au sol (clôtures permanentes, contours d'obstacles) : visibles, mais pas la ligne à suivre
+  for (const o of scene.others ?? []) {
+    ctx.beginPath();
+    const pts = o.closed ? [...o.pts, o.pts[0]] : o.pts;
+    for (let i = 0; i + 1 < pts.length; i++) seg([...pts[i], 0], [...pts[i + 1], 0]);
+    ctx.setLineDash(o.dash ?? []);
+    ctx.strokeStyle = 'rgba(0,0,0,0.45)'; ctx.lineWidth = 6; ctx.lineCap = 'round'; ctx.stroke();
+    ctx.strokeStyle = o.color; ctx.lineWidth = 3; ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
   // clôture : trait épais, bordé de sombre pour rester lisible au soleil
   let visible = false;
   for (const [color, width] of [['rgba(0,0,0,0.55)', 9], [COLORS[scene.level] ?? COLORS.bad, 5]]) {

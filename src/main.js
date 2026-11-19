@@ -93,8 +93,10 @@ const ringOf = (layer) => {
   while (Array.isArray(ll[0])) ll = ll[0];
   return ll.map((p) => [p.lng, p.lat]);
 };
-// Types d'objets dessinés : parcelle ('field'), obstacle (polygone exclu des repères) et clôture ('line').
-const KINDS = ['field', 'obstacle', 'line'];
+// Types d'objets dessinés : parcelle ('field'), obstacle (polygone exclu des repères),
+// clôture temporaire ('line', guidée en Terrain) et clôture naturelle ou permanente ('permanent', seulement affichée).
+const KINDS = ['field', 'obstacle', 'line', 'permanent'];
+const LINE_KINDS = ['line', 'permanent'];
 const isPolygon = (l) => l instanceof L.Polygon;
 const kindOf = (l) => l.feature?.properties?.kind ?? (isPolygon(l) ? 'field' : 'line');
 const isField = (l) => kindOf(l) === 'field';
@@ -102,10 +104,11 @@ const isObstacle = (l) => kindOf(l) === 'obstacle';
 const nameOf = (l) => l.feature?.properties?.name ?? '';
 const fields = () => drawn.getLayers().filter(isField);
 const obstacles = () => drawn.getLayers().filter(isObstacle);
-const userLines = () => drawn.getLayers().filter((l) => kindOf(l) === 'line');
+const userLines = () => drawn.getLayers().filter((l) => kindOf(l) === 'line'); // clôtures temporaires (guidage)
+const allFences = () => drawn.getLayers().filter((l) => LINE_KINDS.includes(kindOf(l)));
 const currentField = () => (state.selected && drawn.hasLayer(state.selected) ? state.selected : fields().slice(-1)[0] || null);
 const selected = () => [...state.sel].filter((l) => drawn.hasLayer(l));
-/** Type de la sélection : 'field', 'line', 'marks' ou null. */
+/** Type de la sélection : 'field', 'obstacle', 'line', 'permanent', 'marks' ou null. */
 const selKind = () => (state.selMarks ? 'marks' : selected()[0] ? kindOf(selected()[0]) : null);
 
 const STYLE = {
@@ -115,6 +118,8 @@ const STYLE = {
   obstacleSel: { color: '#ff9800', weight: 4, dashArray: null, fillColor: '#3e2723', fillOpacity: 0.55 },
   line: { color: '#00e5ff', weight: 4 },
   lineSel: { color: '#2979ff', weight: 7 },
+  permanent: { color: '#ab47bc', weight: 4 },
+  permanentSel: { color: '#2979ff', weight: 7 },
 };
 
 function styleDrawn() {
@@ -137,12 +142,12 @@ const syncLayer = (layer) => { if (!applying) session?.putFeature(featureOf(laye
  */
 function register(layer, id = uid(), props = {}) {
   const shape = isPolygon(layer) ? 'polygon' : 'line';
-  const kind = KINDS.includes(props.kind) && (props.kind === 'line') === (shape === 'line') ? props.kind : (shape === 'polygon' ? 'field' : 'line');
+  const kind = KINDS.includes(props.kind) && LINE_KINDS.includes(props.kind) === (shape === 'line') ? props.kind : (shape === 'polygon' ? 'field' : 'line');
   layer.feature = { type: 'Feature', properties: { id, kind, ...(props.name ? { name: String(props.name) } : {}) }, geometry: null };
   byId.set(id, layer);
   if (!drawn.hasLayer(layer)) drawn.addLayer(layer);
   // en Conception, la sélection passe par un clic sur la carte (voir pickAt)
-  layer.on('click', () => { if (state.mode === 'field' && kind === 'line') pickLine(`u:${L.stamp(layer)}`); });
+  layer.on('click', () => { if (state.mode === 'field' && kindOf(layer) === 'line') pickLine(`u:${L.stamp(layer)}`); });
   ['pm:edit', 'pm:dragend', 'pm:vertexadded', 'pm:vertexremoved'].forEach((ev) => layer.on(ev, () => { syncLayer(layer); refresh(); }));
   applyTool(layer, tool);
   styleDrawn();
@@ -154,7 +159,7 @@ map.on('pm:create', (e) => {
     cutting = null; e.layer.remove();
     return cutField(target, line);
   }
-  register(e.layer, uid(), { kind: tool === 'obstacle' ? 'obstacle' : undefined });
+  register(e.layer, uid(), { kind: tool === 'obstacle' || tool === 'permanent' ? tool : undefined });
   syncLayer(e.layer);
   select([e.layer]);
   refresh();
@@ -241,7 +246,7 @@ function hitTest(latlng) {
     .map((l) => ({ l, d: pt.distanceTo(map.latLngToContainerPoint(l.getLatLng())) })).filter((c) => c.d <= HIT_PX);
   if (points.length) return { layer: points.sort((a, b) => a.d - b.d)[0].l };
   // 2. lignes : clôtures dessinées, puis repères virtuels
-  const lines = userLines().map((l) => ({ l, d: distToLine(pt, l) })).filter((c) => c.d <= HIT_PX);
+  const lines = allFences().map((l) => ({ l, d: distToLine(pt, l) })).filter((c) => c.d <= HIT_PX);
   if (lines.length) return { layer: lines.sort((a, b) => a.d - b.d)[0].l };
   if (generated.getLayers().some((l) => distToLine(pt, l) <= HIT_PX)) return { marks: true };
   // 3. surfaces (parcelles, obstacles) : la plus petite qui contient le point
@@ -297,14 +302,17 @@ function deleteSelection() {
 // ---------------------------------------------------------------- barre d'outils (Conception)
 // Un seul outil actif à la fois. Modifier / Déplacer / Supprimer agissent sur la sélection :
 // on active Geoman objet par objet plutôt qu'en mode global.
-const DRAW_TOOLS = { polygon: 'Polygon', obstacle: 'Polygon', line: 'Line', cut: 'Line' };
+const DRAW_TOOLS = { polygon: 'Polygon', obstacle: 'Polygon', line: 'Line', permanent: 'Line', cut: 'Line' };
 const TOOL_KEEPS_SELECTION = new Set(['merge']);
 // outils pendant lesquels les repères virtuels attirent le curseur (accrochage Geoman)
-const SNAP_TO_MARKS = new Set(['line', 'edit:line']);
+const SNAP_TO_MARKS = new Set(['line', 'edit:line', 'permanent', 'edit:permanent']);
 const TOOL_HINTS = {
   polygon: 'Cliquez les sommets de la parcelle, puis le premier point pour la fermer.',
   obstacle: 'Cliquez les sommets de l\'obstacle, puis le premier point pour le fermer.',
-  line: 'Cliquez les points de la clôture, puis à nouveau le dernier point pour terminer.',
+  line: 'Clôture temporaire : cliquez ses points, puis à nouveau le dernier point pour terminer.',
+  permanent: 'Clôture permanente : cliquez ses points, puis à nouveau le dernier point pour terminer.',
+  'edit:permanent': 'Déplacez les points de la clôture.',
+  'drag:permanent': 'Faites glisser la clôture pour la déplacer.',
   cut: 'Tracez le trait de coupe à travers la parcelle, puis terminez sur le dernier point.',
   merge: 'Cliquez les autres parcelles à fusionner, puis à nouveau sur Fusionner.',
   reference: 'Cliquez un polygone de la couche de référence pour créer une parcelle.',
@@ -381,10 +389,15 @@ toolbar = createToolbar(map, [
     { id: 'clear-gen', title: 'Supprimer les repères', icon: 'delete', onClick: clearGenerated },
   ] },
   { id: 'fences', title: 'Clôtures', color: '#00acc1', buttons: [
-    { id: 'line', title: 'Dessiner une clôture', icon: 'polyline', onClick: () => setTool('line') },
+    { id: 'permanent', title: 'Dessiner une clôture naturelle ou permanente', text: '━', color: STYLE.permanent.color, onClick: () => setTool('permanent') },
+    { id: 'line', title: 'Dessiner une clôture temporaire', text: '┅', color: '#00a5bd', onClick: () => setTool('line') },
+    { id: 'switch-fence', title: 'Changer de type (permanente ↔ temporaire)', text: '⇄', onClick: switchFenceKind },
     { id: 'edit:line', title: 'Modifier la clôture', icon: 'edit', onClick: () => setTool('edit:line') },
     { id: 'drag:line', title: 'Déplacer la clôture', icon: 'drag', onClick: () => setTool('drag:line') },
     { id: 'remove:line', title: 'Supprimer la sélection', icon: 'delete', onClick: deleteSelection },
+    { id: 'edit:permanent', title: 'Modifier la clôture', icon: 'edit', onClick: () => setTool('edit:permanent') },
+    { id: 'drag:permanent', title: 'Déplacer la clôture', icon: 'drag', onClick: () => setTool('drag:permanent') },
+    { id: 'remove:permanent', title: 'Supprimer la sélection', icon: 'delete', onClick: deleteSelection },
   ] },
   { id: 'plan', title: 'Plan', color: '#2e7d32', buttons: [
     { id: 'plan', title: 'Plans : ouvrir, partager, exporter…', text: '📁', onClick: openTool('dlg-plan') },
@@ -395,7 +408,20 @@ toolbar = createToolbar(map, [
 const RENAMABLE = {
   field: { unnamed: 'Parcelle sans nom', question: 'Nom de la parcelle :' },
   obstacle: { unnamed: 'Obstacle sans nom', question: 'Nom de l\'obstacle :' },
+  line: { unnamed: 'Clôture temporaire sans nom', question: 'Nom de la clôture :' },
+  permanent: { unnamed: 'Clôture permanente sans nom', question: 'Nom de la clôture :' },
 };
+
+/** Bascule les clôtures sélectionnées entre temporaire (guidée) et permanente (seulement affichée). */
+function switchFenceKind() {
+  const sel = selected().filter((l) => LINE_KINDS.includes(kindOf(l)));
+  if (!sel.length) return;
+  const to = kindOf(sel[0]) === 'line' ? 'permanent' : 'line';
+  setTool(null);
+  for (const l of sel) { l.feature.properties.kind = to; syncLayer(l); }
+  refresh();
+  toast(to === 'line' ? 'Clôture temporaire : proposée au guidage.' : 'Clôture permanente : affichée, sans guidage.');
+}
 
 /**
  * N'affiche que les outils utilisables : ceux de création toujours, ceux qui agissent sur un objet
@@ -405,12 +431,14 @@ function updateToolbar() {
   if (!toolbar) return;
   const kind = selKind(), n = selected().length;
   const show = {
-    reference: true, polygon: true, obstacle: true, line: true, generate: fields().length > 0,
+    reference: true, polygon: true, obstacle: true, line: true, permanent: true, generate: fields().length > 0,
+    'switch-fence': kind === 'line' || kind === 'permanent',
     merge: kind === 'field',
     cut: kind === 'field' && n === 1,
     'edit:field': kind === 'field' && n === 1, 'drag:field': kind === 'field' && n === 1, 'remove:field': kind === 'field',
     'edit:obstacle': kind === 'obstacle' && n === 1, 'drag:obstacle': kind === 'obstacle' && n === 1, 'remove:obstacle': kind === 'obstacle',
     'edit:line': kind === 'line' && n === 1, 'drag:line': kind === 'line' && n === 1, 'remove:line': kind === 'line',
+    'edit:permanent': kind === 'permanent' && n === 1, 'drag:permanent': kind === 'permanent' && n === 1, 'remove:permanent': kind === 'permanent',
     'clear-gen': kind === 'marks',
   };
   for (const [id, on] of Object.entries(show)) toolbar.setVisible(id, on || tool === id);
@@ -420,13 +448,15 @@ function updateToolbar() {
   const sel = selected();
   let info = '';
   const renamable = RENAMABLE[kind] && sel.length === 1;
+  const isFence = LINE_KINDS.includes(kind);
   if (renamable) {
     const r = ringOf(sel[0]), name = nameOf(sel[0]);
-    info = `<span class="info-name${name ? '' : ' empty'}">${escapeHtml(name || RENAMABLE[kind].unnamed)} ✎</span> · <b>${formatArea(areaLL(r))}</b> · périmètre ${formatLength(lengthLL([...r, r[0]]))}`;
+    const size = isFence ? `<b>${formatLength(lengthLL(r))}</b>` : `<b>${formatArea(areaLL(r))}</b> · périmètre ${formatLength(lengthLL([...r, r[0]]))}`;
+    info = `<span class="info-name${name ? '' : ' empty'}">${escapeHtml(name || RENAMABLE[kind].unnamed)} ✎</span> · ${size}`;
   } else if (kind === 'field' || kind === 'obstacle') {
     info = `${sel.length} ${kind === 'field' ? 'parcelles' : 'obstacles'} : <b>${formatArea(sel.reduce((t, l) => t + areaLL(ringOf(l)), 0))}</b>`;
   }
-  else if (kind === 'line') info = `${sel.length > 1 ? `${sel.length} clôtures` : 'Clôture'} : <b>${formatLength(sel.reduce((t, l) => t + lengthLL(ringOf(l)), 0))}</b>`;
+  else if (isFence) info = `${sel.length} clôtures ${kind === 'line' ? 'temporaires' : 'permanentes'} : <b>${formatLength(sel.reduce((t, l) => t + lengthLL(ringOf(l)), 0))}</b>`;
   else if (kind === 'marks') info = `Repères virtuels : <b>${state.strips.length} bandes</b>`;
   $('field-info').innerHTML = info;
   $('field-info').classList.toggle('renamable', !!renamable);
@@ -645,7 +675,7 @@ function regenerate() {
 function allLines() {
   return userLines().map((l, i) => {
     const coords = ringOf(l);
-    return { id: `u:${L.stamp(l)}`, coords, length: lengthLL(coords), label: `Clôture ${i + 1}` };
+    return { id: `u:${L.stamp(l)}`, coords, length: lengthLL(coords), label: nameOf(l) || `Clôture ${i + 1}` };
   });
 }
 
@@ -905,6 +935,10 @@ function render() {
   const b = (lineBearing * Math.PI) / 180;
   const visible = drawScene(ctx, makeCamera({ width: w, height: h }), {
     fence: prep.pts.map(cam),
+    others: [
+      ...drawn.getLayers().filter((l) => kindOf(l) === 'permanent').map((l) => ({ pts: ringOf(l).map((ll) => cam(prep.proj.toXY(ll))), color: STYLE.permanent.color })),
+      ...obstacles().map((l) => ({ pts: ringOf(l).map((ll) => cam(prep.proj.toXY(ll))), color: STYLE.obstacle.color, closed: true, dash: [8, 6] })),
+    ],
     origin: cam(prep.proj.toXY(pointAt(prep, loc.along))),
     dir: toCameraFrame([Math.sin(b), Math.cos(b)], view),
     along: loc.along, level,

@@ -7,7 +7,7 @@ import L from 'leaflet';
  *
  * blocks : [{ id, title, color, buttons: [{ id, title, icon?, text?, onClick }] }]
  *  - icon : nom d'une icône Geoman (polygon, polyline, edit, drag, delete, cut…)
- *  - text : caractère ou emoji affiché à la place d'une icône
+ *  - text : caractère ou emoji affiché à la place d'une icône (color : sa couleur)
  */
 export function createToolbar(map, blocks, { position = 'topleft' } = {}) {
   const buttons = new Map(); // id -> élément .button-container
@@ -35,6 +35,7 @@ export function createToolbar(map, blocks, { position = 'topleft' } = {}) {
           a.href = '#'; a.role = 'button'; a.title = b.title; a.setAttribute('aria-label', b.title);
           const icon = L.DomUtil.create('div', b.icon ? `control-icon leaflet-pm-icon-${b.icon}` : 'control-icon fency-icon', a);
           if (!b.icon) icon.textContent = b.text ?? '';
+          if (b.color) icon.style.color = b.color;
           L.DomUtil.create('span', 'fency-badge', a);
           L.DomEvent.on(a, 'click', (e) => {
             L.DomEvent.preventDefault(e);
