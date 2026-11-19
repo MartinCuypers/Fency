@@ -66,7 +66,7 @@ map.pm.setLang('fr');
 map.pm.setGlobalOptions({ snappable: true, snapDistance: 15 });
 
 const drawn = L.featureGroup().addTo(map);      // dessins de l'utilisateur (champs, clôtures)
-const generated = L.featureGroup().addTo(map);  // clôtures générées (recalculées)
+const generated = L.featureGroup().addTo(map);  // repères virtuels (recalculés ; Conception seulement)
 const guideLayer = L.featureGroup().addTo(map); // ligne cible, piquets, position
 map.createPane('reference').style.zIndex = 350;  // couche de référence : sous les dessins
 
@@ -77,7 +77,7 @@ const state = {
   sel: new Set(),           // objets sélectionnés (tous du même type : parcelles ou clôtures)
   selMarks: false,          // repères virtuels sélectionnés (ils forment un tout)
   genActive: false,
-  genLines: [],             // clôtures générées {coords,length,label}
+  genLines: [],             // repères virtuels {coords,length,label}
   strips: [],
 };
 let tool = null;     // outil actif de la barre (un seul à la fois), voir setTool
@@ -291,6 +291,8 @@ function deleteSelection() {
 // on active Geoman objet par objet plutôt qu'en mode global.
 const DRAW_TOOLS = { polygon: 'Polygon', line: 'Line', cut: 'Line' };
 const TOOL_KEEPS_SELECTION = new Set(['merge']);
+// outils pendant lesquels les repères virtuels attirent le curseur (accrochage Geoman)
+const SNAP_TO_MARKS = new Set(['line', 'edit:line']);
 const TOOL_HINTS = {
   polygon: 'Cliquez les sommets de la parcelle, puis le premier point pour la fermer.',
   line: 'Cliquez les points de la clôture, puis à nouveau le dernier point pour terminer.',
@@ -317,6 +319,7 @@ function setTool(next) {
   if (next === prev) next = null;
   tool = next;
   if (DRAW_TOOLS[prev]) { cutting = null; map.pm.disableDraw(); }
+  generated.eachLayer((l) => { l.options.snapIgnore = !SNAP_TO_MARKS.has(next); }); // avant d'activer l'outil
   if (next === 'polygon' || next === 'line' || next === 'reference') { state.sel.clear(); state.selMarks = false; }
   drawn.eachLayer((l) => applyTool(l, next));
   if (next === 'cut') cutting = selected().find(isField) ?? null;
@@ -596,28 +599,29 @@ function regenerate() {
     value: p.mode === 'area' ? p.value * 100 : p.value,
   });
   state.strips = res.strips;
-  res.lines.forEach((l, i) => state.genLines.push({ id: `g:${i}`, coords: l.coords, length: l.length, label: `Clôture ${l.strip}` }));
+  res.lines.forEach((l, i) => state.genLines.push({ id: `g:${i}`, coords: l.coords, length: l.length, label: `Repère ${l.strip}` }));
   if (p.perimeter) {
     const closed = [...ring, ring[0]];
-    state.genLines.push({ id: 'p:0', coords: closed, length: lengthLL(closed), label: 'Périmètre' });
+    state.genLines.push({ id: 'p:0', coords: closed, length: lengthLL(closed), label: 'Repère du périmètre' });
   }
   for (const gl of state.genLines) {
     const isPerim = gl.id.startsWith('p');
     const pl = L.polyline(gl.coords.map(([lng, lat]) => [lat, lng]), {
-      color: isPerim ? '#ffa726' : '#ff5252', weight: isPerim ? 3 : 4, baseWeight: isPerim ? 3 : 4, dashArray: isPerim ? '2 6' : '10 6', pmIgnore: true,
+      color: isPerim ? '#ffa726' : '#ff5252', weight: isPerim ? 3 : 4, baseWeight: isPerim ? 3 : 4, dashArray: isPerim ? '2 6' : '10 6',
+      // pas éditables par Geoman, mais accrochables quand on trace ou modifie une clôture
+      pmIgnore: true, snapIgnore: !SNAP_TO_MARKS.has(tool),
     }).addTo(generated);
     pl.bindTooltip(`${gl.label} · ${formatLength(gl.length)}`, { sticky: true, className: 'strip-tip' });
-    pl.on('click', () => { if (state.mode === 'field') pickLine(gl.id); });
   }
 }
 
-// ---------------------------------------------------------------- toutes les clôtures
+// ---------------------------------------------------------------- clôtures à poser (guidage)
+// Seules les clôtures dessinées servent au guidage : les repères virtuels n'aident qu'à les tracer.
 function allLines() {
-  const out = userLines().map((l, i) => {
+  return userLines().map((l, i) => {
     const coords = ringOf(l);
-    return { id: `u:${L.stamp(l)}`, coords, length: lengthLL(coords), label: `Clôture dessinée ${i + 1}` };
+    return { id: `u:${L.stamp(l)}`, coords, length: lengthLL(coords), label: `Clôture ${i + 1}` };
   });
-  return [...out, ...state.genLines];
 }
 
 // ---------------------------------------------------------------- panneaux d'infos
@@ -961,8 +965,9 @@ function setMode(mode) {
   setTool(null);
   // en Terrain, seul le bloc Cartographie reste (zoom, position, fond de carte)
   toolbar.showBlocks(design ? ['map', 'fields', 'marks', 'fences', 'plan'] : ['map']);
-  if (design) guideLayer.clearLayers();
-  else { fillLineSelect(); resetGuidance(); drawTarget(); if (gps.last) update(); }
+  // les repères virtuels ne servent qu'en Conception
+  if (design) { guideLayer.clearLayers(); generated.addTo(map); }
+  else { generated.remove(); fillLineSelect(); resetGuidance(); drawTarget(); if (gps.last) update(); }
   setTimeout(() => map.invalidateSize(), 50);
 }
 $('tab-design').addEventListener('click', () => setMode('design'));

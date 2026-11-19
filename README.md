@@ -8,13 +8,13 @@ Application web / smartphone (PWA installable) pour **concevoir et poser des cl�
 - Fonds de carte : satellite IGN, Esri, plan OSM, Sentinel-2 (indice SAVI, via Sentinel Hub).
 - Parcelles : dessin (polygone), ou création en cliquant un polygone d'une couche de référence WFS (RPG de l'IGN) ; fusion de parcelles voisines (les espaces de moins de 5 m sont comblés) et découpe par un trait ; nom de la parcelle (clic sur la pastille du bas), repris à la découpe et à la fusion.
 - Clôtures dessinées à la main (lignes), accrochage aux sommets.
-- Génération de clôtures de subdivision parallèles, par largeur de bande (m) ou par surface (ares), pour tout type de forme de champ ; direction réglable ou alignée sur le plus long côté ; choix du côté de départ ; clôture du périmètre en option.
+- Repères virtuels : découpage en bandes parallèles, par largeur (m) ou par surface (ares), pour tout type de forme de champ ; direction réglable ou alignée sur le plus long côté ; choix du côté de départ ; périmètre en option. Ils ne servent qu'en Conception, pour accrocher les clôtures qu'on trace ou modifie ; ils ne sont ni affichés ni guidés en Terrain.
 - Surface de la parcelle sélectionnée et de chaque bande.
 - Plusieurs plans nommés, enregistrés automatiquement ; export / import GeoJSON.
 - Stockage et authentification modulables (local par défaut, Firebase, autre hébergeur) pour le travail collaboratif : voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 **Terrain (sur le quad)**
-- Choix d'une clôture (ou la plus proche automatiquement), puis guidage en deux étapes :
+- Choix d'une clôture dessinée (ou la plus proche automatiquement), puis guidage en deux étapes :
   1. **Rejoindre le départ** : flèche de direction et distance jusqu'à l'extrémité la plus proche (inversable).
   2. **Poser la clôture** : vue en perspective du sol devant le quad, avec la clôture et un quadrillage de 1 m gradué, l'écart à la ligne et la longueur restante.
 - Orientation par la boussole du téléphone (à plat, incliné sur un support, portrait ou paysage) ; à défaut, direction de déplacement donnée par le GPS.
