@@ -118,12 +118,13 @@ const fields = () => drawn.getLayers().filter(isField);
 const obstacles = () => drawn.getLayers().filter(isObstacle);
 const userLines = () => drawn.getLayers().filter((l) => kindOf(l) === 'line'); // clôtures temporaires (guidage)
 const allFences = () => drawn.getLayers().filter((l) => LINE_KINDS.includes(kindOf(l)));
-/** Parcelle des repères : la dernière sélectionnée, sinon celle des paramètres enregistrés, sinon la dernière. */
-const currentField = () => {
-  if (state.selected && drawn.hasLayer(state.selected)) return state.selected;
-  const saved = byId.get(state.genFieldId);
-  return saved && drawn.hasLayer(saved) && isField(saved) ? saved : fields().slice(-1)[0] || null;
-};
+/**
+ * Parcelle des repères : la dernière parcelle sélectionnée (elle le reste quand on sélectionne ou trace
+ * autre chose). Les repères ne s'affichent que sur elle, avec ses propres réglages (propriété `marks`).
+ */
+const currentField = () => (state.selected && drawn.hasLayer(state.selected) && isField(state.selected) ? state.selected : null);
+/** Réglages des repères d'une parcelle : paramètres + `on` (affichés ou non). */
+const marksOf = (l) => l?.feature?.properties?.marks ?? null;
 const selected = () => [...state.sel].filter((l) => drawn.hasLayer(l));
 /** Type de la sélection : 'field', 'obstacle', 'line', 'permanent', 'marks' ou null. */
 const selKind = () => (state.selMarks ? 'marks' : selected()[0] ? kindOf(selected()[0]) : null);
@@ -186,7 +187,8 @@ function register(layer, id = uid(), props = {}) {
     layer.options.bubblingMouseEvents = true; // le clic remonte à la carte : sélection commune (hitTest)
   }
   const color = kind === 'line' && /^#[0-9a-f]{6}$/i.test(props.color ?? '') ? props.color : null;
-  layer.feature = { type: 'Feature', properties: { id, kind, ...(props.name ? { name: String(props.name) } : {}), ...(color ? { color } : {}) }, geometry: null };
+  const marks = kind === 'field' && props.marks && typeof props.marks === 'object' ? JSON.parse(JSON.stringify(props.marks)) : null;
+  layer.feature = { type: 'Feature', properties: { id, kind, ...(props.name ? { name: String(props.name) } : {}), ...(color ? { color } : {}), ...(marks ? { marks } : {}) }, geometry: null };
   byId.set(id, layer);
   if (!drawn.hasLayer(layer)) drawn.addLayer(layer);
   // en Conception, la sélection passe par un clic sur la carte (voir hitTest)
@@ -255,7 +257,7 @@ async function mergeSelected() {
   // la parcelle fusionnée garde le premier nom trouvé ; « X (1) » + « X (2) » redonnent « X »
   const names = layers.map(nameOf).filter(Boolean), bases = new Set(names.map((n) => n.replace(/ \(\d+\)$/, '')));
   const name = bases.size === 1 && names.length === layers.length ? [...bases][0] : names[0];
-  select([addField(res.ring, { name })]);
+  select([addField(res.ring, { name, marks: layers.map(marksOf).find(Boolean) })]);
   refresh();
   toast(res.bridged ? 'Parcelles fusionnées (espace entre elles comblé).' : 'Parcelles fusionnées.');
 }
@@ -268,7 +270,7 @@ async function cutField(field, line) {
   if (!pieces.length) return toast('Le trait doit traverser la parcelle de part en part.');
   drawn.removeLayer(field);
   const name = nameOf(field); // les morceaux reprennent le nom, numéroté
-  const layers = pieces.map((ring, i) => addField(ring, { name: name && `${name} (${i + 1})` }));
+  const layers = pieces.map((ring, i) => addField(ring, { name: name && `${name} (${i + 1})`, marks: marksOf(field) }));
   select([layers[0]]);
   refresh();
   toast(`Parcelle coupée en ${pieces.length}.`);
@@ -837,7 +839,6 @@ const params = () => ({
   reverse: $('gen-reverse').checked,
   perimeter: $('gen-perimeter').checked,
   offset: num('gen-offset'),
-  field: currentField()?.feature?.properties?.id ?? null, // parcelle sur laquelle portent les repères
   sec: {
     on: $('sec-on').checked, mode: $('sec-mode').value, value: num('sec-value'), capL: $('sec-cap').checked,
     angle: parseInt($('sec-angle').value, 10), offset: num('sec-offset'),
@@ -965,12 +966,38 @@ function allLines() {
 
 // ---------------------------------------------------------------- panneaux d'infos
 function refresh(save = true) {
+  loadMarks();
   regenerate();
   if (!state.genLines.length) state.selMarks = false;
   styleDrawn();
   renderMarksPanel();
   fillLineSelect();
-  if (save && !applying) session?.saveMeta({ params: params(), genActive: state.genActive });
+  if (save && !applying) storeMarks();
+}
+
+/**
+ * Nouvelle parcelle de référence (sélection, ou parcelle remplacée par une modification reçue) :
+ * le panneau prend ses réglages ; une parcelle sans réglages part des derniers réglages utilisés.
+ */
+function loadMarks() {
+  const f = currentField();
+  if (f === state.marksField) return;
+  state.marksField = f;
+  const m = marksOf(f);
+  applyParams(m ?? state.lastParams);
+  // panneau ouvert : on règle les repères de la parcelle qu'on vient de choisir, donc on les affiche
+  state.genActive = !!m?.on || !$('panel-marks').hidden;
+}
+/** Enregistre les réglages du panneau sur la parcelle (et comme « derniers réglages » du plan). */
+function storeMarks() {
+  const f = state.marksField;
+  if (!f || !drawn.hasLayer(f) || (!marksOf(f) && !state.genActive)) return; // parcelle jamais utilisée pour des repères
+  const next = { ...params(), on: state.genActive };
+  if (JSON.stringify(next) === JSON.stringify(marksOf(f))) return;
+  f.feature.properties.marks = next;
+  syncLayer(f);
+  state.lastParams = params();
+  session?.saveMeta({ params: state.lastParams });
 }
 
 // ---------------------------------------------------------------- panneau des repères (en direct)
@@ -1007,7 +1034,11 @@ $('grid-info').addEventListener('click', (e) => {
 });
 
 function openMarksPanel(open = $('panel-marks').hidden) {
-  if (open && !currentField()) return toast('Dessinez d\'abord une parcelle (polygone).');
+  if (open && !currentField()) {
+    // aucune parcelle sélectionnée : on prend la seule, sinon on demande d'en choisir une
+    if (fields().length === 1) select([fields()[0]]);
+    else return toast(fields().length ? 'Sélectionnez d\'abord la parcelle.' : 'Dessinez d\'abord une parcelle (polygone).');
+  }
   $('panel-marks').hidden = !open;
   document.body.classList.toggle('marks-open', open);
   if (open) { setTool(null); state.genActive = true; refresh(); }
@@ -1028,7 +1059,7 @@ $('btn-ref-use').addEventListener('click', () => {
   if (map.getZoom() < REF_MIN_ZOOM) toast('Zoomez sur vos parcelles pour afficher la couche.');
 });
 $('btn-align').addEventListener('click', () => {
-  const f = currentField(); if (!f) return toast('Dessinez d\'abord un champ.');
+  const f = currentField(); if (!f) return toast('Sélectionnez d\'abord une parcelle.');
   $('gen-angle').value = longestEdgeBearing(ringOf(f)); refresh();
 });
 
@@ -1058,7 +1089,8 @@ $('btn-export').addEventListener('click', () => {
   // les repères ne sont pas exportés comme lignes : seulement leurs paramètres (fency.params), qui
   // permettent de les recalculer à l'import ; params.field désigne la parcelle concernée
   const fc = drawn.toGeoJSON(8);
-  fc.fency = { version: 2, name: session?.current?.name, params: params(), genActive: state.genActive };
+  // réglages des repères : dans les propriétés de chaque parcelle (marks) ; fency.params = derniers utilisés
+  fc.fency = { version: 3, name: session?.current?.name, params: state.lastParams ?? params() };
   const slug = (session?.current?.name || 'plan').toLowerCase().normalize('NFD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'plan';
   const name = `fency-${slug}-${new Date().toISOString().slice(0, 10)}.geojson`;
   if (android) return android.saveFile(name, JSON.stringify(fc));
@@ -1075,9 +1107,12 @@ $('file-import').addEventListener('change', async (e) => {
     const fc = JSON.parse(await file.text());
     const n = loadFeatures(fc);
     const meta = fc.fency ?? fc.fencemapper; // « fencemapper » : anciens exports
-    // la parcelle des repères a reçu un nouvel identifiant à l'import
-    if (meta?.params) applyParams({ ...meta.params, field: loadFeatures.ids.get(meta.params.field) ?? null });
-    state.genActive = !!meta?.genActive;
+    if (meta?.params) {
+      state.lastParams = meta.params;
+      // anciens exports : un seul jeu de réglages, pour la parcelle params.field (renumérotée à l'import)
+      migrateMarks(meta, (id) => byId.get(loadFeatures.ids.get(id)));
+    }
+    state.marksField = undefined; // recharger le panneau
     refresh();
     if (drawn.getLayers().length) map.fitBounds(drawn.getBounds(), { padding: [30, 30] });
     const long = userLines().filter((l) => lengthLL(ringOf(l)) > MAX_TEMP + 0.01).length;
@@ -1094,12 +1129,21 @@ $('btn-reset').addEventListener('click', () => {
 });
 
 /**
- * `withField` : reprendre aussi la parcelle des repères (ouverture d'un plan, import). Pas pour les
- * changements reçus d'un autre appareil : chacun garde la parcelle sur laquelle il travaille.
+ * Plans et exports des versions précédentes : un seul jeu de réglages (meta.params, meta.genActive) pour
+ * la parcelle params.field. Il devient les réglages de cette parcelle, si elle n'en a pas déjà.
  */
-function applyParams(p, { withField = true } = {}) {
+function migrateMarks(meta, findField) {
+  const { field, ...p } = meta.params ?? {};
+  // versions sans params.field : les repères portaient sur la dernière parcelle dessinée
+  const f = field ? findField(field) : meta.genActive ? fields().slice(-1)[0] : null;
+  if (!f || !isField(f) || marksOf(f)) return;
+  f.feature.properties.marks = { ...p, on: !!meta.genActive };
+  syncLayer(f);
+}
+
+/** Met des réglages de repères dans le panneau. */
+function applyParams(p) {
   if (!p) return;
-  if (withField && p.field) { state.genFieldId = p.field; state.selected = null; }
   $('gen-mode').value = p.mode === 'area' ? 'area' : 'width';
   $('gen-value').value = p.value ?? 20; $('gen-angle').value = p.angle ?? 90;
   $('gen-reverse').checked = !!p.reverse; $('gen-perimeter').checked = p.perimeter !== false;
@@ -1417,16 +1461,18 @@ const sessionUi = {
     applying = true;
     try {
       state.sel.clear(); state.selMarks = false; setTool(null);
-      drawn.clearLayers(); byId.clear(); state.selected = null;
-      applyParams(meta.params); state.genActive = !!meta.genActive;
+      drawn.clearLayers(); byId.clear(); state.selected = null; state.marksField = undefined;
+      state.lastParams = meta.params ?? null;
       loadFeatures({ type: 'FeatureCollection', features }, { keepIds: true });
     } finally { applying = false; }
+    migrateMarks(meta, (id) => byId.get(id));
     refresh(false); showPlanName();
     if (drawn.getLayers().length) map.fitBounds(drawn.getBounds(), { padding: [30, 30], maxZoom: 18 });
   },
   applyMeta(meta) {
     applying = true;
-    try { applyParams(meta.params, { withField: false }); state.genActive = !!meta.genActive; } finally { applying = false; }
+    // réglages d'un autre appareil : ils deviennent les « derniers utilisés », sans toucher au panneau
+    try { if (meta.params) state.lastParams = meta.params; } finally { applying = false; }
     refresh(false); showPlanName();
   },
   upsertFeature(feature) {

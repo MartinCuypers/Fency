@@ -64,6 +64,11 @@ export function runStoreContract(name, makePair) {
     await a.putFeature(p.id, { ...line('l1'), properties: { id: 'l1', kind: 'line', color: '#ff9100' } });
     ({ features } = await a.loadPlan(p.id));
     assert.equal(features.find((f) => f.properties.id === 'l1').properties.color, '#ff9100');
+    // réglages des repères d'une parcelle (objet imbriqué)
+    const marks = { mode: 'width', value: 40, angle: 90, sec: { on: true, value: 100, capL: true }, on: true };
+    await a.putFeature(p.id, { ...field('f1'), properties: { id: 'f1', kind: 'field', marks } });
+    ({ features } = await a.loadPlan(p.id));
+    assert.deepEqual(features.find((f) => f.properties.id === 'f1').properties.marks, marks);
 
     await a.deleteFeature(p.id, 'f1');
     ({ features } = await a.loadPlan(p.id));

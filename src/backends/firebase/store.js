@@ -32,7 +32,7 @@ export function createFirestoreStore({ db, fs, auth, clientId = uid() }) {
   });
   const toFeature = (fid, d) => ({
     type: 'Feature',
-    properties: { id: fid, kind: d.kind, ...(d.name ? { name: d.name } : {}), ...(d.color ? { color: d.color } : {}), updatedAt: d.updatedAt ?? 0, by: d.by ?? '' },
+    properties: { id: fid, kind: d.kind, ...(d.name ? { name: d.name } : {}), ...(d.color ? { color: d.color } : {}), ...(d.marks ? { marks: d.marks } : {}), updatedAt: d.updatedAt ?? 0, by: d.by ?? '' },
     geometry: JSON.parse(d.geometry),
   });
 
@@ -76,6 +76,7 @@ export function createFirestoreStore({ db, fs, auth, clientId = uid() }) {
       await fs.setDoc(featureRef(planId, f.properties.id), {
         kind: f.properties.kind, ...(f.properties.name ? { name: f.properties.name } : {}),
         ...(f.properties.color ? { color: f.properties.color } : {}),
+        ...(f.properties.marks ? { marks: f.properties.marks } : {}), // réglages des repères d'une parcelle
         geometry: JSON.stringify(f.geometry), updatedAt: f.properties.updatedAt, by: clientId,
       });
     },
