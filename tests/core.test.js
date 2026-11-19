@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeProjection, areaLL, lengthLL, longestEdgeBearing } from '../src/geo.js';
 import { generateStrips, generateGrid, paddockOf, fitPaddock } from '../src/generate.js';
-import { prepareLine, locate, pointAt, estimateMaterial, toStart, bearingAt, nextPhase, nearerEndIsLast } from '../src/guidance.js';
+import { prepareLine, locate, pointAt, toStart, bearingAt, nextPhase, nearerEndIsLast } from '../src/guidance.js';
 import { headingFromOrientation, angleDiff, smoothAngle } from '../src/compass.js';
-import { makeCamera, toCameraFrame } from '../src/perspective.js';
+import { makeCamera, toCameraFrame, segmentInRect } from '../src/perspective.js';
 
 // Rectangle 200 m (est-ouest) x 100 m (nord-sud) = 2 ha, près de Rennes
 const origin = [-1.68, 48.11];
@@ -137,8 +137,6 @@ test('pointAt et matériel', () => {
   assert.ok(Math.abs(line.length - 150) < 0.1);
   const q = p.toXY(pointAt(line, 125));
   assert.ok(Math.abs(q[0] - 100) < 0.1 && Math.abs(q[1] - 25) < 0.1);
-  const m = estimateMaterial([200, 200], { rows: 2 });
-  assert.deepEqual(m, { total: 400, wire: 800 });
 });
 
 test('guidage : rejoindre le départ (distance et cap), cap de la ligne', () => {
@@ -214,4 +212,11 @@ test('perspective : projection du sol', () => {
   near(toCameraFrame([10, 0], 90), [0, 10]);
   near(toCameraFrame([0, 10], 90), [-10, 0]);
   near(toCameraFrame([3, 4], 0), [3, 4]);
+});
+
+test('segment à l\'écran : traversant, extrémités hors champ, ou à côté', () => {
+  assert.ok(segmentInRect([-500, 150], [900, 160], 0, 100, 400, 300)); // vue en travers : extrémités hors champ
+  assert.ok(segmentInRect([10, 120], [20, 130], 0, 100, 400, 300));   // entièrement dedans
+  assert.ok(!segmentInRect([-500, 50], [900, 60], 0, 100, 400, 300)); // au-dessus (ciel)
+  assert.ok(!segmentInRect([500, 150], [900, 250], 0, 100, 400, 300)); // à droite
 });

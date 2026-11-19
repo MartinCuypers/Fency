@@ -11,7 +11,9 @@ Application web / smartphone (PWA installable) pour **concevoir et poser des cl�
 - Clôtures dessinées à la main, de deux types : **temporaires** (les seules proposées au guidage ; 280 m au plus, la longueur d'un kit : le tracé s'arrête de lui-même à 280 m et la pastille affiche la longueur restante ; couleur au choix avec le pinceau de la pastille) et **naturelles ou permanentes** (haies, clôtures fixes : couleur distincte, affichées en Terrain et dans la vue en perspective, jamais guidées) ; nommables, type modifiable ; accrochage aux sommets, aux bords des parcelles et obstacles et aux repères virtuels.
 - Repères virtuels, réglés dans un panneau latéral avec mise à jour en direct : lignes principales (par largeur en m ou par surface en ares, pour tout type de forme de champ ; direction réglable ou alignée sur le plus long côté ; côté de départ ; décalage ; périmètre en option) et lignes secondaires d'une autre direction (largeur en m ou surface de paddock, décalage). Les croisements servent de points d'accroche. Le panneau indique la taille des paddocks et la longueur de la clôture en L qui les ferme, et propose d'ajuster les espacements pour une L de 280 m (enrouleur Kiwitech). Option « L de 280 m maxi » : les lignes secondaires sont placées bande par bande pour qu'un seul kit de 280 m ferme deux côtés de chaque paddock, quitte à réduire les paddocks trop grands. Les repères ne servent qu'en Conception, pour accrocher les clôtures qu'on trace ou modifie ; ils ne sont ni affichés ni guidés en Terrain.
 - Surface de la parcelle sélectionnée et de chaque bande.
-- Plusieurs plans nommés, enregistrés automatiquement ; export / import GeoJSON.
+- Noms des parcelles, obstacles et clôtures permanentes affichés sur la carte.
+- Plusieurs plans nommés, enregistrés automatiquement ; export / import GeoJSON : objets dessinés (avec type, nom, couleur) et, dans `fency.params`, les paramètres des repères (dont `field`, la parcelle concernée), recalculés à l'import.
+- Sur écran tactile : boutons au format du doigt, zoom par pincement ; la barre d'outils défile si elle dépasse la carte.
 - Stockage et authentification modulables (local par défaut, Firebase, autre hébergeur) pour le travail collaboratif : voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 - Électrificateurs (points, autant que nécessaire) : posés depuis le bloc Clôtures, ils s'accrochent aux clôtures ; nommables, déplaçables ; la pastille indique la clôture sur laquelle ils sont (ou à quelle distance).
@@ -69,7 +71,7 @@ Pour une précision de 2 à 5 cm sur le quad, associer un récepteur RTK Bluetoo
 
 - `src/geo.js` : projection locale, surfaces, longueurs
 - `src/generate.js` : découpage d'un champ en bandes
-- `src/guidance.js` : écart latéral, étapes du guidage, estimation de matériel
+- `src/guidance.js` : écart latéral, étapes du guidage
 - `src/compass.js` : cap du téléphone à partir des capteurs d'orientation
 - `src/perspective.js` : vue en perspective (projection, quadrillage, clôture)
 - `src/toolbar.js` : barre d'outils de la carte en blocs (Geoman reste le moteur de dessin)

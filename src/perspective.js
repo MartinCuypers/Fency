@@ -52,6 +52,18 @@ const COLORS = { ok: '#43a047', warn: '#fb8c00', bad: '#e53935' };
  * @param {'ok'|'warn'|'bad'} scene.level
  * @returns {boolean} vrai si une partie de la clôture est visible à l'écran
  */
+/** Le segment [a, b] coupe-t-il le rectangle [x0, x1] × [y0, y1] ? (découpage de Liang-Barsky) */
+export function segmentInRect(a, b, x0, y0, x1, y1) {
+  let t0 = 0, t1 = 1;
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  for (const [p, q] of [[-dx, a[0] - x0], [dx, x1 - a[0]], [-dy, a[1] - y0], [dy, y1 - a[1]]]) {
+    if (p === 0) { if (q < 0) return false; continue; }
+    const r = q / p;
+    if (p < 0) { if (r > t1) return false; if (r > t0) t0 = r; } else { if (r < t0) return false; if (r < t1) t1 = r; }
+  }
+  return t0 <= t1;
+}
+
 export function drawScene(ctx, cam, scene) {
   const { width: w, height: h, horizonY } = cam;
   // ciel et sol
@@ -113,8 +125,9 @@ export function drawScene(ctx, cam, scene) {
       const s = cam.clip([...scene.fence[i], 0], [...scene.fence[i + 1], 0]);
       if (!s) continue;
       ctx.moveTo(s[0][0], s[0][1]); ctx.lineTo(s[1][0], s[1][1]);
-      const on = (p) => p[0] > -w && p[0] < 2 * w && p[1] > 0 && p[1] < h;
-      if ((on(s[0]) || on(s[1])) && Math.max(s[0][1], s[1][1]) > horizonY + 2) visible = true;
+      // visible si le segment traverse la zone de sol à l'écran (ses extrémités peuvent être hors champ,
+      // par exemple quand on regarde la clôture en travers)
+      if (segmentInRect(s[0], s[1], 0, horizonY + 2, w, h)) visible = true;
     }
     ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.stroke();
   }

@@ -48,16 +48,20 @@ export function createToolbar(map, blocks, { position = 'topleft' } = {}) {
     },
   });
   const control = new Control({ position }).addTo(map);
+  // la barre ne dépasse jamais la carte (ni la pastille d'infos en bas) : au-delà, elle défile
+  const fit = () => { control.getContainer().style.maxHeight = `${Math.max(120, map.getSize().y - 64)}px`; };
+  map.on('resize', fit); fit();
 
   return {
     control,
     /** Bouton enfoncé (outil actif). */
     setActive(id, on) { buttons.get(id)?.classList.toggle('active', !!on); },
-    setDisabled(id, on) { buttons.get(id)?.classList.toggle('disabled', !!on); },
     /** Petit compteur sur un bouton ('' pour l'effacer). */
     setBadge(id, text) { const el = buttons.get(id)?.querySelector('.fency-badge'); if (el) el.textContent = text ?? ''; },
     /** Affiche ou masque un bouton (le bloc disparaît s'il n'a plus de bouton visible). */
     setVisible(id, on) { const el = buttons.get(id); if (el && el.hidden === !!on) { el.hidden = !on; layout(); } },
+    /** Ajuste la hauteur maximale à la carte (après un changement de mise en page). */
+    fit,
     /** N'affiche que les blocs donnés. */
     showBlocks(ids) { allowed = ids; layout(); },
   };

@@ -11,13 +11,11 @@ body { display:flex; flex-direction:column; height:100dvh; overflow:hidden; }
 .panel { background:var(--bg); border-top:1px solid var(--line); max-height:46dvh; overflow-y:auto; z-index:1000; padding-bottom:env(safe-area-inset-bottom); }
 .panel.hidden { display:none; }
 .panel-body { padding:10px 14px 16px; }
-.handle { display:none; }
 h3 { margin:14px 0 6px; font-size:15px; color:var(--green); }
 h3:first-child { margin-top:0; }
 .hint { font-size:13px; color:var(--muted); margin:0 0 8px; }
 .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0; }
 .grid { display:grid; gap:8px; }
-.grid.two { grid-template-columns:1fr 1fr; }
 label { display:flex; flex-direction:column; gap:3px; font-size:13px; color:var(--muted); }
 label.check { flex-direction:row; align-items:center; gap:6px; color:var(--fg); font-size:14px; }
 input[type=number], select { font-size:16px; padding:8px; border:1px solid var(--line); border-radius:6px; background:#fff; color:var(--fg); min-width:0; }
@@ -57,7 +55,6 @@ button.danger { color:var(--warn); }
 .quad-icon { line-height:0; filter:drop-shadow(0 0 2px rgba(0,0,0,.5)); }
 #me-arrow { transition:transform .2s linear; }
 #me-arrow .me-dir { display:none; } #me-arrow.has-heading .me-dir { display:inline; } #me-arrow.has-heading .me-dot { display:none; }
-.post-label { background:#fff; border:1px solid #333; border-radius:3px; padding:0 4px; font-size:11px; }
 .leaflet-tooltip.strip-tip { font-size:12px; padding:2px 6px; }
 
 @media (min-width: 820px) {
@@ -78,8 +75,6 @@ button.danger { color:var(--warn); }
 .rtk-status div { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
 /* Plans, comptes */
-.plan-head { justify-content:space-between; }
-.plan-head b { font-size:16px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .badge { font-size:12px; color:var(--muted); white-space:nowrap; }
 .badge.saved { color:var(--ok); } .badge.error { color:var(--warn); font-weight:600; }
 dialog { border:0; border-radius:12px; padding:16px; width:min(92vw, 440px); max-height:86dvh; overflow-y:auto; box-shadow:0 10px 40px rgba(0,0,0,.35); color:var(--fg); }
@@ -122,7 +117,7 @@ body.mode-design #toast { bottom:56px; }
 .map-info .info-name.empty { font-weight:400; color:var(--muted); font-style:italic; }
 
 /* Barre d'outils de la carte (src/toolbar.js), en blocs, dans le style de Geoman */
-.fency-toolbar { display:flex; flex-direction:column; gap:8px; }
+.fency-toolbar { display:flex; flex-direction:column; gap:8px; overflow-y:auto; overflow-x:hidden; padding:6px 10px 6px 0; margin-top:4px !important; scrollbar-width:thin; }
 .fency-toolbar .fency-block { margin:0; border-left:4px solid var(--block-color, rgba(0,0,0,.2)); }
 .fency-toolbar .fency-block[hidden] { display:none; }
 .fency-toolbar .leaflet-buttons-control-button { position:relative; }
@@ -174,3 +169,17 @@ button.choice.current { background:#eef5ee; border-color:var(--green2); font-wei
 .energizer-icon.sel { border-color:#2979ff; box-shadow:0 0 0 4px rgba(41,121,255,.6); }
 .energizer-row { flex-wrap:nowrap; }
 .energizer-row button { flex:none; }
+
+/* Noms sur la carte */
+.leaflet-tooltip.name-label { background:rgba(255,255,255,.85); border:0; box-shadow:0 1px 3px rgba(0,0,0,.35); border-radius:4px; padding:1px 6px; font-size:12px; font-weight:600; color:#1b1b1b; white-space:nowrap; }
+.leaflet-tooltip.name-label::before { display:none; }
+.leaflet-tooltip.name-obstacle { background:rgba(62,39,35,.85); color:#fff; }
+.leaflet-tooltip.name-permanent { color:#6a1b9a; }
+
+/* Écrans tactiles : boutons au format du doigt */
+@media (pointer: coarse) {
+  .fency-toolbar .leaflet-bar a.leaflet-buttons-control-button { width:42px; height:42px; line-height:42px; padding:8px; }
+  .fency-toolbar .fency-icon { font-size:21px; }
+  .fency-toolbar { gap:10px; }
+  .side-head button, .side-body button { min-height:40px; }
+}

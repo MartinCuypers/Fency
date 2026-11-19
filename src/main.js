@@ -98,6 +98,7 @@ const ringOf = (layer) => {
 // affichée) et électrificateur ('energizer', point).
 const KINDS = ['field', 'obstacle', 'line', 'permanent', 'energizer'];
 const LINE_KINDS = ['line', 'permanent'];
+const LABELED = ['field', 'obstacle', 'permanent']; // types dont le nom s'affiche sur la carte
 const isPolygon = (l) => l instanceof L.Polygon;
 const isMarker = (l) => l instanceof L.Marker;
 const kindOf = (l) => l.feature?.properties?.kind ?? (isMarker(l) ? 'energizer' : isPolygon(l) ? 'field' : 'line');
@@ -114,7 +115,12 @@ const fields = () => drawn.getLayers().filter(isField);
 const obstacles = () => drawn.getLayers().filter(isObstacle);
 const userLines = () => drawn.getLayers().filter((l) => kindOf(l) === 'line'); // clôtures temporaires (guidage)
 const allFences = () => drawn.getLayers().filter((l) => LINE_KINDS.includes(kindOf(l)));
-const currentField = () => (state.selected && drawn.hasLayer(state.selected) ? state.selected : fields().slice(-1)[0] || null);
+/** Parcelle des repères : la dernière sélectionnée, sinon celle des paramètres enregistrés, sinon la dernière. */
+const currentField = () => {
+  if (state.selected && drawn.hasLayer(state.selected)) return state.selected;
+  const saved = byId.get(state.genFieldId);
+  return saved && drawn.hasLayer(saved) && isField(saved) ? saved : fields().slice(-1)[0] || null;
+};
 const selected = () => [...state.sel].filter((l) => drawn.hasLayer(l));
 /** Type de la sélection : 'field', 'obstacle', 'line', 'permanent', 'marks' ou null. */
 const selKind = () => (state.selMarks ? 'marks' : selected()[0] ? kindOf(selected()[0]) : null);
@@ -143,6 +149,13 @@ function styleDrawn() {
     const k = kindOf(l), sel = state.sel.has(l), own = k === 'line' && colorOf(l);
     // clôture temporaire colorée : sa couleur, et un trait plus épais quand elle est sélectionnée
     l.setStyle(own ? { color: own, weight: sel ? 8 : 4 } : STYLE[sel ? `${k}Sel` : k]);
+    // nom affiché sur la carte (parcelles, obstacles, clôtures permanentes)
+    const label = LABELED.includes(k) ? nameOf(l) : '';
+    if (label) {
+      if (!l.getTooltip()) l.bindTooltip('', { permanent: true, direction: 'center', className: `name-label name-${k}` });
+      l.setTooltipContent(escapeHtml(label));
+      l.openTooltip(); // recentre l'étiquette si la forme a changé
+    } else if (l.getTooltip()) l.unbindTooltip();
   });
   generated.eachLayer((l) => l.setStyle({ weight: state.selMarks ? 6 : l.options.baseWeight }));
   updateToolbar();
@@ -173,7 +186,7 @@ function register(layer, id = uid(), props = {}) {
   layer.feature = { type: 'Feature', properties: { id, kind, ...(props.name ? { name: String(props.name) } : {}), ...(color ? { color } : {}) }, geometry: null };
   byId.set(id, layer);
   if (!drawn.hasLayer(layer)) drawn.addLayer(layer);
-  // en Conception, la sélection passe par un clic sur la carte (voir pickAt)
+  // en Conception, la sélection passe par un clic sur la carte (voir hitTest)
   layer.on('click', (e) => {
     if (state.mode !== 'field') return;
     if (kindOf(layer) === 'line') pickLine(`u:${L.stamp(layer)}`);
@@ -560,6 +573,9 @@ function switchFenceKind() {
   toast(to === 'line' ? 'Clôture temporaire : proposée au guidage.' : 'Clôture permanente : affichée, sans guidage.');
 }
 
+// écran tactile : on zoome en pinçant la carte, les boutons de zoom ne servent qu'à la souris
+if (matchMedia('(pointer: coarse)').matches) { toolbar.setVisible('zoom-in', false); toolbar.setVisible('zoom-out', false); }
+
 /**
  * N'affiche que les outils utilisables : ceux de création toujours, ceux qui agissent sur un objet
  * seulement quand la sélection s'y prête. Pendant un outil, on garde son bouton (pour en sortir).
@@ -791,6 +807,7 @@ const params = () => ({
   reverse: $('gen-reverse').checked,
   perimeter: $('gen-perimeter').checked,
   offset: num('gen-offset'),
+  field: currentField()?.feature?.properties?.id ?? null, // parcelle sur laquelle portent les repères
   sec: {
     on: $('sec-on').checked, mode: $('sec-mode').value, value: num('sec-value'), capL: $('sec-cap').checked,
     angle: parseInt($('sec-angle').value, 10), offset: num('sec-offset'),
@@ -994,19 +1011,24 @@ function loadFeatures(fc, { keepIds = false } = {}) {
     onEachFeature: (f, l) => layers.push([f, l]),
   });
   let n = 0;
+  const ids = new Map(); // identifiant d'origine -> nouvel identifiant (import)
   for (const [f, l] of layers) {
     if (!(l instanceof L.Polyline) && !isMarker(l)) continue;
-    register(l, keepIds && f.properties?.id ? f.properties.id : uid(), f.properties ?? {});
+    const id = keepIds && f.properties?.id ? f.properties.id : uid();
+    if (f.properties?.id) ids.set(f.properties.id, id);
+    register(l, id, f.properties ?? {});
     syncLayer(l); n++;
   }
+  loadFeatures.ids = ids;
   return n;
 }
 
 $('btn-export').addEventListener('click', () => {
   $('dlg-plan').close();
+  // les repères ne sont pas exportés comme lignes : seulement leurs paramètres (fency.params), qui
+  // permettent de les recalculer à l'import ; params.field désigne la parcelle concernée
   const fc = drawn.toGeoJSON(8);
-  state.genLines.forEach((gl) => fc.features.push({ type: 'Feature', properties: { kind: 'generated', label: gl.label, length_m: Math.round(gl.length) }, geometry: { type: 'LineString', coordinates: gl.coords } }));
-  fc.fency = { version: 1, name: session?.current?.name, params: params(), genActive: state.genActive };
+  fc.fency = { version: 2, name: session?.current?.name, params: params(), genActive: state.genActive };
   const slug = (session?.current?.name || 'plan').toLowerCase().normalize('NFD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'plan';
   const name = `fency-${slug}-${new Date().toISOString().slice(0, 10)}.geojson`;
   if (android) return android.saveFile(name, JSON.stringify(fc));
@@ -1023,7 +1045,8 @@ $('file-import').addEventListener('change', async (e) => {
     const fc = JSON.parse(await file.text());
     const n = loadFeatures(fc);
     const meta = fc.fency ?? fc.fencemapper; // « fencemapper » : anciens exports
-    if (meta?.params) applyParams(meta.params);
+    // la parcelle des repères a reçu un nouvel identifiant à l'import
+    if (meta?.params) applyParams({ ...meta.params, field: loadFeatures.ids.get(meta.params.field) ?? null });
     state.genActive = !!meta?.genActive;
     refresh();
     if (drawn.getLayers().length) map.fitBounds(drawn.getBounds(), { padding: [30, 30] });
@@ -1039,6 +1062,7 @@ $('btn-reset').addEventListener('click', () => {
 
 function applyParams(p) {
   if (!p) return;
+  if (p.field) { state.genFieldId = p.field; state.selected = null; }
   $('gen-mode').value = p.mode === 'area' ? 'area' : 'width';
   $('gen-value').value = p.value ?? 20; $('gen-angle').value = p.angle ?? 90;
   $('gen-reverse').checked = !!p.reverse; $('gen-perimeter').checked = p.perimeter !== false;

@@ -41,12 +41,6 @@ export function pointAt(line, s) {
   return line.proj.toLL([ax + t * (bx - ax), ay + t * (by - ay)]);
 }
 
-/** Estimation de matériel pour un ensemble de lignes : longueur de clôture et de fil. */
-export function estimateMaterial(lengths, { rows = 1 } = {}) {
-  const total = lengths.reduce((s, l) => s + l, 0);
-  return { total, wire: total * rows };
-}
-
 /** Distance (m) et cap (0 = nord, sens horaire) depuis une position vers le départ de la ligne. */
 export function toStart(line, ll) {
   const [x, y] = line.proj.toXY(ll); // le départ est l'origine du repère de la ligne
