@@ -4,12 +4,12 @@ Application web / smartphone (PWA installable) pour **concevoir et poser des cl�
 
 ## Fonctions
 
-**Conception (sur ordinateur ou téléphone)**
+**Conception (sur ordinateur ou téléphone)** : tout se fait depuis la barre d'outils de la carte, en cinq blocs (Cartographie, Parcelles, Repères virtuels, Clôtures, Plan) ; les réglages s'ouvrent dans des fenêtres.
 - Fonds de carte : satellite IGN, Esri, plan OSM, Sentinel-2 (indice SAVI, via Sentinel Hub).
-- Parcelles : dessin (polygone/rectangle), ou création en cliquant un polygone d'une couche de référence WFS (RPG de l'IGN) ; fusion de parcelles voisines (les espaces de moins de 5 m sont comblés) et découpe par un trait.
+- Parcelles : dessin (polygone), ou création en cliquant un polygone d'une couche de référence WFS (RPG de l'IGN) ; fusion de parcelles voisines (les espaces de moins de 5 m sont comblés) et découpe par un trait.
 - Clôtures dessinées à la main (lignes), accrochage aux sommets.
 - Génération de clôtures de subdivision parallèles, par largeur de bande (m) ou par surface (ares), pour tout type de forme de champ ; direction réglable ou alignée sur le plus long côté ; choix du côté de départ ; clôture du périmètre en option.
-- Surface de chaque bande, longueur totale de clôture et de fil estimées.
+- Surface de la parcelle sélectionnée et de chaque bande.
 - Plusieurs plans nommés, enregistrés automatiquement ; export / import GeoJSON.
 - Stockage et authentification modulables (local par défaut, Firebase, autre hébergeur) pour le travail collaboratif : voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -68,4 +68,5 @@ Pour une précision de 2 à 5 cm sur le quad, associer un récepteur RTK Bluetoo
 - `src/guidance.js` : écart latéral, étapes du guidage, estimation de matériel
 - `src/compass.js` : cap du téléphone à partir des capteurs d'orientation
 - `src/perspective.js` : vue en perspective (projection, quadrillage, clôture)
+- `src/toolbar.js` : barre d'outils de la carte en blocs (Geoman reste le moteur de dessin)
 - `src/main.js` : carte et interface

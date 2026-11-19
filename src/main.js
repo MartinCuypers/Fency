@@ -5,12 +5,13 @@ import '@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css';
 import './style.css';
 import { areaLL, lengthLL, longestEdgeBearing, formatArea, formatLength } from './geo.js';
 import { generateStrips } from './generate.js';
-import { prepareLine, locate, pointAt, estimateMaterial, toStart, bearingAt, nextPhase, nearerEndIsLast } from './guidance.js';
+import { prepareLine, locate, pointAt, toStart, bearingAt, nextPhase, nearerEndIsLast } from './guidance.js';
 import { startCompass, angleDiff } from './compass.js';
 import { makeCamera, toCameraFrame, drawScene } from './perspective.js';
 import { createBackend, readConfig } from './backends/index.js';
 import { uid } from './backends/types.js';
 import { createSession } from './session.js';
+import { createToolbar } from './toolbar.js';
 import { loadLayerSpecs, tileUrl, tileOptions, wfsUrl, normalizeWfs, outerRingAt, BBOX_VARIANTS, catalogPlan, parseWfsEndpoint, parseWfsCapabilities, searchCatalog, layerLabel, wfsSpecLine } from './layers.js';
 
 const $ = (id) => document.getElementById(id);
@@ -23,7 +24,7 @@ const escapeHtml = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '
 safe(() => { for (const k of ['plan.v1', 'basemap']) { const o = localStorage.getItem('fencemapper.' + k); if (o && !localStorage.getItem('fency.' + k)) localStorage.setItem('fency.' + k, o); } });
 
 // ---------------------------------------------------------------- carte
-const map = L.map('map', { zoomControl: true, maxZoom: 21 }).setView([46.6, 2.4], 6);
+const map = L.map('map', { zoomControl: false, maxZoom: 21 }).setView([46.6, 2.4], 6);
 
 // couches ajoutées par l'utilisateur depuis le catalogue d'un serveur (mémorisées sur l'appareil)
 let customLayers = safe(() => JSON.parse(localStorage.getItem('fency.customLayers')), null) ?? [];
@@ -31,25 +32,37 @@ const readLayers = () => loadLayerSpecs([import.meta.env.VITE_FENCY_LAYERS, ...c
 let layerSpecs = readLayers();
 const basemaps = Object.fromEntries(layerSpecs.basemaps.map((spec) =>
   [spec.id, L.tileLayer(tileUrl(spec), { maxZoom: 21, crossOrigin: true, ...tileOptions(spec) })]));
-$('basemap').innerHTML = layerSpecs.basemaps.map((b) => `<option value="${b.id}">${b.label}</option>`).join('');
 let currentBase = safe(() => localStorage.getItem('fency.basemap'), null) || 'ign';
 if (!basemaps[currentBase]) currentBase = layerSpecs.basemaps[0].id;
 basemaps[currentBase].addTo(map);
-$('basemap').value = currentBase;
-$('basemap').addEventListener('change', (e) => {
+function setBasemap(id) {
+  if (!basemaps[id] || id === currentBase) return;
   map.removeLayer(basemaps[currentBase]);
-  currentBase = e.target.value;
+  currentBase = id;
   basemaps[currentBase].addTo(map);
   safe(() => localStorage.setItem('fency.basemap', currentBase));
+}
+function renderBasemaps() {
+  const box = $('basemap-list');
+  box.innerHTML = '';
+  for (const b of layerSpecs.basemaps) {
+    const btn = document.createElement('button');
+    btn.className = 'choice' + (b.id === currentBase ? ' current' : '');
+    btn.textContent = b.label;
+    btn.addEventListener('click', () => { setBasemap(b.id); $('dlg-basemap').close(); });
+    box.appendChild(btn);
+  }
+}
+
+// fenêtres : boutons « Fermer », et clic à côté de la fenêtre
+document.querySelectorAll('dialog').forEach((dlg) => {
+  dlg.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => dlg.close()));
+  dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close(); });
 });
+/** Ferme les fenêtres ouvertes puis ouvre celle demandée. */
+const openDialog = (id) => { document.querySelectorAll('dialog[open]').forEach((d) => d.close()); $(id).showModal(); };
 
 map.pm.setLang('fr');
-const GEOMAN_CONTROLS = {
-  position: 'topleft', drawMarker: false, drawCircleMarker: false, drawCircle: false, drawText: false,
-  drawRectangle: true, drawPolygon: true, drawPolyline: true, cutPolygon: false, rotateMode: false,
-  editMode: true, dragMode: true, removalMode: true,
-};
-map.pm.addControls(GEOMAN_CONTROLS);
 map.pm.setGlobalOptions({ snappable: true, snapDistance: 15 });
 
 const drawn = L.featureGroup().addTo(map);      // dessins de l'utilisateur (champs, clôtures)
@@ -66,6 +79,8 @@ const state = {
   genLines: [],             // clôtures générées {coords,length,label}
   strips: [],
 };
+let tool = null;     // outil actif de la barre (un seul à la fois), voir setTool
+let toolbar = null;  // barre d'outils de la carte (src/toolbar.js)
 
 const toast = (msg) => {
   const t = $('toast'); t.textContent = msg; t.classList.add('show');
@@ -93,8 +108,7 @@ function styleDrawn() {
   const cur = currentField();
   drawn.eachLayer((l) => l.setStyle(!isField(l) ? STYLE.line : state.multi.has(l) ? STYLE.fieldMulti : l === cur ? STYLE.fieldSel : STYLE.field));
   const n = [...state.multi].filter((l) => drawn.hasLayer(l)).length;
-  $('btn-merge').disabled = n < 2;
-  $('btn-merge').textContent = n >= 2 ? `Fusionner (${n})` : 'Fusionner';
+  toolbar?.setBadge('merge', n ? String(n) : '');
 }
 
 // Chaque élément dessiné porte un identifiant stable : c'est l'unité d'enregistrement
@@ -112,15 +126,19 @@ function register(layer, id = uid()) {
   if (!drawn.hasLayer(layer)) drawn.addLayer(layer);
   layer.on('click', (e) => {
     if (state.mode === 'field' && kind === 'line') return pickLine(`u:${L.stamp(layer)}`);
+    if (state.mode !== 'design') return;
+    if (tool === `remove:${kind}`) { L.DomEvent.stop(e); drawn.removeLayer(layer); return; }
     if (kind !== 'field') return;
     const o = e.originalEvent;
-    if (state.mode === 'design' && ($('multi').checked || o?.ctrlKey || o?.shiftKey || o?.metaKey)) {
-      // sélection multiple (case cochée, ou Ctrl/Maj + clic) : pour fusionner
+    if (tool === 'merge' || o?.ctrlKey || o?.shiftKey || o?.metaKey) {
+      // sélection multiple (outil Fusion, ou Ctrl/Maj + clic) : pour fusionner
+      if (tool !== 'merge') setTool('merge');
       if (state.multi.has(layer)) state.multi.delete(layer); else state.multi.add(layer);
     } else { state.multi.clear(); state.selected = layer; }
     styleDrawn(); refresh(false);
   });
   ['pm:edit', 'pm:dragend', 'pm:vertexadded', 'pm:vertexremoved'].forEach((ev) => layer.on(ev, () => { syncLayer(layer); refresh(); }));
+  applyTool(layer, tool);
   styleDrawn();
 }
 
@@ -153,29 +171,20 @@ function addField(ring) {
   return layer;
 }
 
-$('btn-merge').addEventListener('click', async () => {
+async function mergeSelected() {
   const layers = [...state.multi].filter((l) => drawn.hasLayer(l));
   if (layers.length < 2) return;
   const { mergeParcels } = await import('./parcels.js');
   const res = mergeParcels(layers.map(ringOf));
   if (!res) return toast('Fusion impossible : ces parcelles sont séparées de plus de 5 m.');
+  setTool(null);
   layers.forEach((l) => drawn.removeLayer(l));
-  state.multi.clear(); $('multi').checked = false;
   state.selected = addField(res.ring);
   refresh();
   toast(res.bridged ? 'Parcelles fusionnées (espace entre elles comblé).' : 'Parcelles fusionnées.');
-});
+}
 
 let cutting = null; // parcelle en cours de découpe (on attend le tracé du trait de coupe)
-$('btn-cut').addEventListener('click', () => {
-  const field = currentField();
-  if (!field) return toast('Sélectionnez d\'abord une parcelle.');
-  state.selected = field; styleDrawn();
-  cutting = field;
-  map.pm.enableDraw('Line', { snappable: true });
-  toast('Tracez le trait de coupe à travers la parcelle, puis terminez sur le dernier point.');
-});
-map.on('pm:drawend', () => setTimeout(() => { cutting = null; }, 0)); // tracé abandonné
 
 async function cutField(field, line) {
   const { splitParcel } = await import('./parcels.js');
@@ -188,6 +197,92 @@ async function cutField(field, line) {
   toast(`Parcelle coupée en ${pieces.length}.`);
 }
 
+// ---------------------------------------------------------------- barre d'outils (Conception)
+// Un seul outil actif à la fois. Les modes Modifier / Déplacer / Supprimer ne visent qu'un type
+// d'objet (parcelles ou clôtures) : on les active objet par objet plutôt qu'en mode global Geoman.
+const kindOf = (l) => (isField(l) ? 'field' : 'line');
+const DRAW_TOOLS = { polygon: 'Polygon', line: 'Line', cut: 'Line' };
+const TOOL_HINTS = {
+  polygon: 'Cliquez les sommets de la parcelle, puis le premier point pour la fermer.',
+  line: 'Cliquez les points de la clôture, puis à nouveau le dernier point pour terminer.',
+  cut: 'Tracez le trait de coupe à travers la parcelle, puis terminez sur le dernier point.',
+  merge: 'Cliquez les parcelles à fusionner, puis à nouveau sur Fusionner.',
+  'edit:field': 'Déplacez les sommets des parcelles.',
+  'edit:line': 'Déplacez les points des clôtures.',
+  'drag:field': 'Faites glisser une parcelle pour la déplacer.',
+  'drag:line': 'Faites glisser une clôture pour la déplacer.',
+  'remove:field': 'Cliquez une parcelle pour la supprimer.',
+  'remove:line': 'Cliquez une clôture pour la supprimer.',
+};
+
+/** Met un objet dans l'état voulu par l'outil (édition des sommets, déplacement). */
+function applyTool(layer, t) {
+  if (!layer.pm) return;
+  const kind = kindOf(layer);
+  if (t === `edit:${kind}`) layer.pm.enable({ snappable: true }); else if (layer.pm.enabled()) layer.pm.disable();
+  if (t === `drag:${kind}`) layer.pm.enableLayerDrag(); else if (layer.pm.layerDragEnabled?.()) layer.pm.disableLayerDrag();
+}
+
+/** Active un outil ; le même outil une seconde fois, ou null, revient à la navigation. */
+function setTool(next) {
+  const prev = tool;
+  if (next === prev) next = null;
+  if (next === 'cut' && !currentField()) { toast('Sélectionnez d\'abord une parcelle.'); next = null; }
+  tool = next;
+  if (DRAW_TOOLS[prev]) { cutting = null; map.pm.disableDraw(); }
+  if (prev === 'merge' && next !== 'merge') state.multi.clear();
+  drawn.eachLayer((l) => applyTool(l, next));
+  if (next === 'cut') { cutting = currentField(); state.selected = cutting; }
+  if (DRAW_TOOLS[next]) map.pm.enableDraw(DRAW_TOOLS[next], { snappable: true });
+  for (const id of Object.keys(TOOL_HINTS)) toolbar?.setActive(id, id === tool);
+  map.getContainer().classList.toggle('tool-remove', !!tool?.startsWith('remove:'));
+  if (tool) toast(TOOL_HINTS[tool]);
+  styleDrawn();
+}
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && tool && !document.querySelector('dialog[open]')) setTool(null); });
+// tracé terminé ou abandonné : on revient à la navigation
+map.on('pm:drawend', () => setTimeout(() => {
+  if (DRAW_TOOLS[tool] && !map.pm.globalDrawModeEnabled()) { cutting = null; setTool(null); }
+}, 0));
+
+function locateMe() {
+  if (!navigator.geolocation) return toast('Géolocalisation indisponible.');
+  navigator.geolocation.getCurrentPosition(
+    (p) => map.setView([p.coords.latitude, p.coords.longitude], 17),
+    () => toast('Position refusée ou indisponible.'), { enableHighAccuracy: true, timeout: 15000 });
+}
+
+toolbar = createToolbar(map, [
+  { id: 'map', title: 'Cartographie', color: '#1565c0', buttons: [
+    { id: 'zoom-in', title: 'Zoom avant', text: '+', onClick: () => map.zoomIn() },
+    { id: 'zoom-out', title: 'Zoom arrière', text: '−', onClick: () => map.zoomOut() },
+    { id: 'locate', title: 'Ma position', text: '📍', onClick: locateMe },
+    { id: 'basemap', title: 'Fond de carte', text: '🗺️', onClick: () => { renderBasemaps(); openDialog('dlg-basemap'); } },
+  ] },
+  { id: 'fields', title: 'Parcelles', color: '#f9a825', buttons: [
+    { id: 'reference', title: 'Couche de référence (créer une parcelle en cliquant un polygone)', text: '▦', onClick: () => { setTool(null); openDialog('dlg-reference'); } },
+    { id: 'polygon', title: 'Dessiner une parcelle', icon: 'polygon', onClick: () => setTool('polygon') },
+    { id: 'merge', title: 'Fusionner des parcelles', text: '⧉', onClick: () => (tool === 'merge' && state.multi.size >= 2 ? mergeSelected() : setTool('merge')) },
+    { id: 'cut', title: 'Couper la parcelle sélectionnée', icon: 'cut', onClick: () => setTool('cut') },
+    { id: 'edit:field', title: 'Modifier les parcelles', icon: 'edit', onClick: () => setTool('edit:field') },
+    { id: 'drag:field', title: 'Déplacer une parcelle', icon: 'drag', onClick: () => setTool('drag:field') },
+    { id: 'remove:field', title: 'Supprimer une parcelle', icon: 'delete', onClick: () => setTool('remove:field') },
+  ] },
+  { id: 'marks', title: 'Repères virtuels', color: '#e53935', buttons: [
+    { id: 'generate', title: 'Générer les repères', text: '▤', onClick: () => { setTool(null); openDialog('dlg-generate'); } },
+    { id: 'clear-gen', title: 'Supprimer les repères', icon: 'delete', onClick: clearGenerated },
+  ] },
+  { id: 'fences', title: 'Clôtures', color: '#00acc1', buttons: [
+    { id: 'line', title: 'Dessiner une clôture', icon: 'polyline', onClick: () => setTool('line') },
+    { id: 'edit:line', title: 'Modifier les clôtures', icon: 'edit', onClick: () => setTool('edit:line') },
+    { id: 'drag:line', title: 'Déplacer une clôture', icon: 'drag', onClick: () => setTool('drag:line') },
+    { id: 'remove:line', title: 'Supprimer une clôture', icon: 'delete', onClick: () => setTool('remove:line') },
+  ] },
+  { id: 'plan', title: 'Plan', color: '#2e7d32', buttons: [
+    { id: 'plan', title: 'Plans : ouvrir, partager, exporter…', text: '📁', onClick: () => { setTool(null); openDialog('dlg-plan'); } },
+  ] },
+]);
+
 // ---------------------------------------------------------------- couche de référence (WFS)
 const REF_MIN_ZOOM = 14;
 const ref = { spec: null, variant: null, ctrl: null, timer: null };
@@ -198,7 +293,7 @@ const refLayer = L.geoJSON(null, {
     layer.on('mouseover', () => layer.setStyle({ weight: 3, fillOpacity: 0.25 }));
     layer.on('mouseout', () => refLayer.resetStyle(layer));
     layer.on('click', (e) => {
-      if (state.mode !== 'design' || cutting || map.pm.globalDrawModeEnabled() || map.pm.globalRemovalModeEnabled()) return;
+      if (state.mode !== 'design' || tool) return;
       L.DomEvent.stopPropagation(e);
       const field = addField(outerRingAt(feature, [e.latlng.lng, e.latlng.lat]));
       state.multi.clear(); state.selected = field;
@@ -330,7 +425,7 @@ async function searchLayers() {
     $('cat-results').appendChild(row);
   }
 }
-$('btn-layers').addEventListener('click', (e) => { e.preventDefault(); $('dlg-layers').showModal(); renderMyLayers(); searchLayers(); });
+$('btn-layers').addEventListener('click', (e) => { e.preventDefault(); openDialog('dlg-layers'); renderMyLayers(); searchLayers(); });
 $('btn-layers-close').addEventListener('click', () => $('dlg-layers').close());
 $('btn-cat-search').addEventListener('click', searchLayers);
 $('cat-query').addEventListener('keydown', (e) => { if (e.key === 'Enter') searchLayers(); });
@@ -354,7 +449,6 @@ const params = () => ({
   angle: parseInt($('gen-angle').value, 10),
   reverse: $('gen-reverse').checked,
   perimeter: $('gen-perimeter').checked,
-  rows: parseInt($('mat-rows').value, 10) || 1,
 });
 
 function regenerate() {
@@ -399,19 +493,12 @@ function refresh(save = true) {
   regenerate();
   const f = currentField();
   $('field-info').innerHTML = f
-    ? `Champ sélectionné : <b>${formatArea(areaLL(ringOf(f)))}</b> · périmètre ${formatLength(lengthLL([...ringOf(f), ringOf(f)[0]]))}${fields().length > 1 ? ` <small>(${fields().length} champs — cliquez pour changer)</small>` : ''}`
-    : 'Aucun champ dessiné.';
+    ? `Parcelle : <b>${formatArea(areaLL(ringOf(f)))}</b> · périmètre ${formatLength(lengthLL([...ringOf(f), ringOf(f)[0]]))}${fields().length > 1 ? ` <small>(${fields().length} parcelles)</small>` : ''}`
+    : '';
   $('strip-list').innerHTML = state.strips.length
     ? `<table>${state.strips.map((s) => `<tr><td>Bande ${s.index}</td><td>${formatArea(s.area)}</td></tr>`).join('')}</table>`
     : '';
-  const p = params(), lines = allLines();
-  if (lines.length) {
-    const m = estimateMaterial(lines.map((l) => l.length), { rows: p.rows });
-    $('material').innerHTML = `<table>
-      <tr><td>Longueur de clôture</td><td>${formatLength(m.total)}</td></tr>
-      <tr><td>Fil / ruban (${p.rows} rang${p.rows > 1 ? 's' : ''})</td><td>${formatLength(m.wire)}</td></tr></table>
-      <small>Estimation indicative, hors portails et angles.</small>`;
-  } else $('material').innerHTML = '';
+  const p = params();
   $('gen-angle-val').textContent = `${p.angle}°`;
   fillLineSelect();
   if (save && !applying) session?.saveMeta({ params: params(), genActive: state.genActive });
@@ -424,13 +511,18 @@ $('gen-mode').addEventListener('change', () => {
   $('gen-value').value = area ? 30 : 20;
   refresh();
 });
-['gen-value', 'gen-angle', 'gen-reverse', 'gen-perimeter', 'mat-rows'].forEach((id) => $(id).addEventListener('input', () => refresh()));
+['gen-value', 'gen-angle', 'gen-reverse', 'gen-perimeter'].forEach((id) => $(id).addEventListener('input', () => refresh()));
 $('btn-generate').addEventListener('click', () => {
-  if (!currentField()) return toast('Dessinez d\'abord un champ (polygone).');
+  if (!currentField()) return toast('Dessinez d\'abord une parcelle (polygone).');
   state.genActive = true; refresh();
+  $('dlg-generate').close();
   const f = currentField(); map.fitBounds(f.getBounds(), { padding: [30, 30], maxZoom: 19 });
 });
-$('btn-clear-gen').addEventListener('click', () => { state.genActive = false; refresh(); });
+function clearGenerated() {
+  setTool(null);
+  if (!state.genActive) return toast('Aucun repère à supprimer.');
+  state.genActive = false; refresh(); toast('Repères supprimés.');
+}
 $('btn-align').addEventListener('click', () => {
   const f = currentField(); if (!f) return toast('Dessinez d\'abord un champ.');
   $('gen-angle').value = longestEdgeBearing(ringOf(f)); refresh();
@@ -454,6 +546,7 @@ function loadFeatures(fc, { keepIds = false } = {}) {
 }
 
 $('btn-export').addEventListener('click', () => {
+  $('dlg-plan').close();
   const fc = drawn.toGeoJSON(8);
   state.genLines.forEach((gl) => fc.features.push({ type: 'Feature', properties: { kind: 'generated', label: gl.label, length_m: Math.round(gl.length) }, geometry: { type: 'LineString', coordinates: gl.coords } }));
   fc.fency = { version: 1, name: session?.current?.name, params: params(), genActive: state.genActive };
@@ -465,7 +558,7 @@ $('btn-export').addEventListener('click', () => {
   a.download = name;
   a.click(); URL.revokeObjectURL(a.href);
 });
-$('btn-import').addEventListener('click', () => $('file-import').click());
+$('btn-import').addEventListener('click', () => { $('dlg-plan').close(); $('file-import').click(); });
 $('file-import').addEventListener('change', async (e) => {
   const file = e.target.files[0]; e.target.value = '';
   if (!file) return;
@@ -481,7 +574,8 @@ $('file-import').addEventListener('change', async (e) => {
   } catch { toast('Fichier GeoJSON invalide.'); }
 });
 $('btn-reset').addEventListener('click', () => {
-  if (!confirm('Tout effacer (champs, clôtures et génération) ?')) return;
+  if (!confirm('Tout effacer (parcelles, clôtures et repères) ?')) return;
+  $('dlg-plan').close(); setTool(null);
   drawn.clearLayers(); state.selected = null; state.genActive = false; refresh();
 });
 
@@ -491,16 +585,7 @@ function applyParams(p) {
   $('gen-value-label').textContent = p.mode === 'area' ? 'Surface par bande (ares, 100 a = 1 ha)' : 'Largeur (m)';
   $('gen-value').value = p.value ?? 20; $('gen-angle').value = p.angle ?? 90;
   $('gen-reverse').checked = !!p.reverse; $('gen-perimeter').checked = p.perimeter !== false;
-  $('mat-rows').value = p.rows ?? 1;
 }
-
-// ---------------------------------------------------------------- ma position
-$('btn-locate').addEventListener('click', () => {
-  if (!navigator.geolocation) return toast('Géolocalisation indisponible.');
-  navigator.geolocation.getCurrentPosition(
-    (p) => map.setView([p.coords.latitude, p.coords.longitude], 17),
-    () => toast('Position refusée ou indisponible.'), { enableHighAccuracy: true, timeout: 15000 });
-});
 
 // ================================================================ MODE TERRAIN
 // Guidage en deux étapes : 1) rejoindre le départ de la clôture (flèche + distance) ;
@@ -734,10 +819,13 @@ function setMode(mode) {
   state.mode = mode;
   const design = mode === 'design';
   $('tab-design').classList.toggle('active', design); $('tab-field').classList.toggle('active', !design);
-  $('panel-design').classList.toggle('hidden', !design); $('panel-field').classList.toggle('hidden', design);
-  map.pm.disableDraw(); map.pm.disableGlobalEditMode(); map.pm.disableGlobalDragMode?.(); map.pm.disableGlobalRemovalMode?.();
-  if (design) { map.pm.addControls(GEOMAN_CONTROLS); guideLayer.clearLayers(); }
-  else { map.pm.removeControls(); fillLineSelect(); resetGuidance(); drawTarget(); if (gps.last) update(); }
+  $('panel-field').classList.toggle('hidden', design);
+  document.body.classList.toggle('mode-design', design); document.body.classList.toggle('mode-field', !design);
+  setTool(null);
+  // en Terrain, seul le bloc Cartographie reste (zoom, position, fond de carte)
+  toolbar.showBlocks(design ? ['map', 'fields', 'marks', 'fences', 'plan'] : ['map']);
+  if (design) guideLayer.clearLayers();
+  else { fillLineSelect(); resetGuidance(); drawTarget(); if (gps.last) update(); }
   setTimeout(() => map.invalidateSize(), 50);
 }
 $('tab-design').addEventListener('click', () => setMode('design'));
@@ -842,7 +930,7 @@ async function renderPlans() {
   }
 }
 
-$('btn-plans').addEventListener('click', () => { if (!session) return; $('dlg-plans').showModal(); renderPlans(); });
+$('btn-plans').addEventListener('click', () => { if (!session) return; openDialog('dlg-plans'); renderPlans(); });
 $('btn-plans-close').addEventListener('click', () => $('dlg-plans').close());
 $('btn-plan-new').addEventListener('click', async () => {
   const name = prompt('Nom du nouveau plan :', 'Nouveau plan')?.trim();
@@ -870,7 +958,7 @@ function showAccount(user) {
   $('btn-account').textContent = user ? `👤 ${user.name}` : 'Se connecter';
 }
 $('btn-account').addEventListener('click', async () => {
-  if (!backend.auth.user) return $('dlg-auth').showModal();
+  if (!backend.auth.user) return openDialog('dlg-auth');
   if (confirm(`Se déconnecter de ${backend.auth.user.name} ?`)) { await session.flush(); await backend.auth.signOut(); }
 });
 $('btn-auth-close').addEventListener('click', () => $('dlg-auth').close());

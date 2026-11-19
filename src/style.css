@@ -67,6 +67,9 @@ button.danger { color:var(--warn); }
   #map { grid-column:1; grid-row:2; min-width:0; }
   .panel { grid-column:2; grid-row:2; max-height:none; border-top:0; border-left:1px solid var(--line); }
   #toast { bottom:20px; left:calc(50% - 190px); }
+  /* Conception : pas de panneau, la carte prend toute la largeur */
+  body.mode-design { grid-template-columns:minmax(0, 1fr); }
+  body.mode-design #toast { left:50%; }
 }
 
 /* Qualité de position (RTK natif Android) */
@@ -103,3 +106,31 @@ input[type=url], input[type=search], input[type=text] { font-size:16px; padding:
 .cat-item div { min-width:0; } .cat-item b, .cat-item small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .cat-item small { color:var(--muted); }
 .cat-item button { padding:6px 10px; font-size:14px; flex:none; }
+
+/* En-tête : nom du plan */
+#topbar .plan-head { flex:1; min-width:0; display:flex; align-items:baseline; gap:6px; }
+#topbar .plan-head b { font-size:14px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#topbar .badge { color:rgba(255,255,255,.75); }
+#topbar .badge.error { color:#ffcdd2; }
+
+/* Conception : la carte occupe tout l'écran */
+body.mode-design #toast { bottom:56px; }
+.map-info { position:fixed; left:50%; transform:translateX(-50%); bottom:calc(12px + env(safe-area-inset-bottom)); z-index:1000; background:rgba(255,255,255,.94); border-radius:16px; padding:5px 12px; font-size:13px; box-shadow:0 1px 5px rgba(0,0,0,.3); max-width:calc(100vw - 24px); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; pointer-events:none; }
+.map-info:empty, body.mode-field .map-info { display:none; }
+
+/* Barre d'outils de la carte (src/toolbar.js), en blocs, dans le style de Geoman */
+.fency-toolbar { display:flex; flex-direction:column; gap:8px; }
+.fency-toolbar .fency-block { margin:0; border-left:4px solid var(--block-color, rgba(0,0,0,.2)); }
+.fency-toolbar .fency-block[hidden] { display:none; }
+.fency-toolbar .leaflet-buttons-control-button { position:relative; }
+.fency-toolbar .fency-icon { background:none; display:flex; align-items:center; justify-content:center; font-size:17px; line-height:1; color:#333; font-weight:600; }
+.fency-toolbar .button-container.disabled .leaflet-buttons-control-button { opacity:.4; cursor:default; }
+.fency-badge { position:absolute; top:-5px; right:-7px; min-width:16px; height:16px; padding:0 4px; border-radius:8px; background:#e040fb; color:#fff; font-size:11px; line-height:16px; text-align:center; font-weight:700; }
+.fency-badge:empty { display:none; }
+.leaflet-container.tool-remove .leaflet-interactive { cursor:not-allowed; }
+
+/* Fenêtres de choix */
+.choice-list { display:grid; gap:6px; margin:8px 0; }
+button.choice { text-align:left; }
+button.choice.current { background:#eef5ee; border-color:var(--green2); font-weight:600; }
+#dlg-plan .grid button { width:100%; }
