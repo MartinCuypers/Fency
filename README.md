@@ -14,6 +14,8 @@ Application web / smartphone (PWA installable) pour **concevoir et poser des cl�
 - Plusieurs plans nommés, enregistrés automatiquement ; export / import GeoJSON.
 - Stockage et authentification modulables (local par défaut, Firebase, autre hébergeur) pour le travail collaboratif : voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+- Électrificateurs (points, autant que nécessaire) : posés depuis le bloc Clôtures, ils s'accrochent aux clôtures ; nommables, déplaçables ; la pastille indique la clôture sur laquelle ils sont (ou à quelle distance).
+
 **Terrain (sur le quad)**
 - Choix d'une clôture dessinée (ou la plus proche automatiquement), puis guidage en deux étapes :
   1. **Rejoindre le départ** : flèche de direction et distance jusqu'à l'extrémité la plus proche (inversable).
@@ -21,6 +23,7 @@ Application web / smartphone (PWA installable) pour **concevoir et poser des cl�
 - Orientation par la boussole du téléphone (à plat, incliné sur un support, portrait ou paysage) ; à défaut, direction de déplacement donnée par le GPS.
 - Écran maintenu allumé, fonctionnement hors ligne pour les zones déjà affichées.
 - Mode « Simuler » (clic sur la carte) pour tester sans GPS.
+- Électrificateurs : affichés sur la carte et en perspective (poteaux jaunes) ; distance au plus proche ; « ⚡ Électrificateur ici » en pose un à la position GPS ; un appui sur l'un d'eux permet de le déplacer à sa position, de le renommer ou de le supprimer.
 
 ## Application Android avec correction RTK
 

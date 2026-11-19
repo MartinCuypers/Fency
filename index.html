@@ -37,6 +37,10 @@
         <button id="btn-rtk" hidden>⚙ RTK</button>
       </div>
       <div id="rtk-status" class="info rtk-status"></div>
+      <div class="row energizer-row">
+        <button id="btn-energizer-here">⚡ Électrificateur ici</button>
+        <span id="energizer-near" class="hint"></span>
+      </div>
       <div id="guide" class="guide">
         <div class="row guide-head">
           <b id="guide-step">Démarrez le GPS</b>
@@ -122,6 +126,17 @@
       <div id="strip-list" class="info"></div>
     </div>
   </aside>
+
+  <dialog id="dlg-energizer">
+    <h3 id="energizer-title">⚡ Électrificateur</h3>
+    <p id="energizer-where" class="hint"></p>
+    <div class="grid">
+      <button id="btn-energizer-move">Déplacer à ma position</button>
+      <button id="btn-energizer-rename">Renommer</button>
+      <button id="btn-energizer-delete" class="danger">Supprimer</button>
+    </div>
+    <div class="row"><button data-close>Fermer</button></div>
+  </dialog>
 
   <dialog id="dlg-color">
     <h3>Couleur de la clôture</h3>

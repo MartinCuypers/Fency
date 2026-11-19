@@ -128,6 +128,21 @@ export function drawScene(ctx, cam, scene) {
     ctx.beginPath(); ctx.arc(s[1][0], s[1][1], 6, 0, 2 * Math.PI); ctx.fillStyle = color; ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
   };
   pole(scene.fence[0], '#2e7d32'); pole(scene.fence.at(-1), '#c62828');
+  // électrificateurs : poteaux jaunes marqués d'un éclair
+  for (const pt of scene.energizers ?? []) {
+    const s = cam.clip([...pt, 0], [...pt, 1.4]);
+    if (!s) continue;
+    ctx.beginPath(); ctx.moveTo(s[0][0], s[0][1]); ctx.lineTo(s[1][0], s[1][1]);
+    ctx.strokeStyle = '#212121'; ctx.lineWidth = 6; ctx.stroke();
+    ctx.strokeStyle = '#ffd600'; ctx.lineWidth = 3; ctx.stroke();
+    const r = Math.max(8, Math.min(16, (s[0][1] - s[1][1]) / 3));
+    ctx.beginPath(); ctx.arc(s[1][0], s[1][1], r, 0, 2 * Math.PI); ctx.fillStyle = '#ffd600'; ctx.fill(); ctx.strokeStyle = '#212121'; ctx.lineWidth = 2; ctx.stroke();
+    // éclair noir, dessiné (un émoji resterait jaune sur jaune)
+    const [cx, cy] = s[1], k = r / 10;
+    ctx.beginPath();
+    [[2, -8], [-4, 1], [0, 1], [-2, 8], [4, -1], [0, -1]].forEach(([x, y], i) => (i ? ctx.lineTo(cx + x * k, cy + y * k) : ctx.moveTo(cx + x * k, cy + y * k)));
+    ctx.closePath(); ctx.fillStyle = '#212121'; ctx.fill();
+  }
 
   // le quad : flèche au sol, toujours orientée vers l'avant
   const tri = [[0, 1.1], [-0.55, -0.6], [0, -0.25], [0.55, -0.6]].map((p) => cam.project([...p, 0]));

@@ -168,3 +168,9 @@ button.choice.current { background:#eef5ee; border-color:var(--green2); font-wei
 .swatches { display:grid; grid-template-columns:repeat(5, 1fr); gap:8px; margin:10px 0; }
 .swatch { height:44px; border-radius:10px; background:var(--c); border:2px solid rgba(0,0,0,.25); font-size:12px; padding:0; color:#003; }
 .swatch.current { outline:3px solid var(--green2); outline-offset:2px; }
+
+/* Électrificateurs */
+.energizer-icon { display:flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:50%; background:#ffd600; border:2px solid #212121; font-size:17px; line-height:1; box-shadow:0 1px 4px rgba(0,0,0,.5); }
+.energizer-icon.sel { border-color:#2979ff; box-shadow:0 0 0 4px rgba(41,121,255,.6); }
+.energizer-row { flex-wrap:nowrap; }
+.energizer-row button { flex:none; }

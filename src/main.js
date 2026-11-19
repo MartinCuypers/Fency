@@ -94,11 +94,16 @@ const ringOf = (layer) => {
   return ll.map((p) => [p.lng, p.lat]);
 };
 // Types d'objets dessinés : parcelle ('field'), obstacle (polygone exclu des repères),
-// clôture temporaire ('line', guidée en Terrain) et clôture naturelle ou permanente ('permanent', seulement affichée).
-const KINDS = ['field', 'obstacle', 'line', 'permanent'];
+// clôture temporaire ('line', guidée en Terrain), clôture naturelle ou permanente ('permanent', seulement
+// affichée) et électrificateur ('energizer', point).
+const KINDS = ['field', 'obstacle', 'line', 'permanent', 'energizer'];
 const LINE_KINDS = ['line', 'permanent'];
 const isPolygon = (l) => l instanceof L.Polygon;
-const kindOf = (l) => l.feature?.properties?.kind ?? (isPolygon(l) ? 'field' : 'line');
+const isMarker = (l) => l instanceof L.Marker;
+const kindOf = (l) => l.feature?.properties?.kind ?? (isMarker(l) ? 'energizer' : isPolygon(l) ? 'field' : 'line');
+const energizers = () => drawn.getLayers().filter(isMarker);
+const BOLT_SVG = '<svg viewBox="-9 -9 18 18" width="22" height="22" aria-hidden="true"><path d="M2-8-4 1H0L-2 8 4-1H0Z" fill="#212121"/></svg>';
+const energizerIcon = (sel) => L.divIcon({ className: `energizer-icon${sel ? ' sel' : ''}`, html: BOLT_SVG, iconSize: [30, 30], iconAnchor: [15, 15] });
 const isField = (l) => kindOf(l) === 'field';
 const isObstacle = (l) => kindOf(l) === 'obstacle';
 const nameOf = (l) => l.feature?.properties?.name ?? '';
@@ -127,6 +132,14 @@ const STYLE = {
 
 function styleDrawn() {
   drawn.eachLayer((l) => {
+    if (isMarker(l)) { // électrificateur : on ne change l'icône que si la sélection a changé
+      const sel = state.sel.has(l);
+      if (l._sel !== sel) { // nouvelle icône : Geoman doit se rebrancher sur le nouvel élément
+        l._sel = sel; l.setIcon(energizerIcon(sel));
+        if (l.pm?.enabled()) { l.pm.disable(); l.pm.enable({ snappable: true, draggable: true }); }
+      }
+      return;
+    }
     const k = kindOf(l), sel = state.sel.has(l), own = k === 'line' && colorOf(l);
     // clôture temporaire colorée : sa couleur, et un trait plus épais quand elle est sélectionnée
     l.setStyle(own ? { color: own, weight: sel ? 8 : 4 } : STYLE[sel ? `${k}Sel` : k]);
@@ -148,18 +161,29 @@ const syncLayer = (layer) => { if (!applying) session?.putFeature(featureOf(laye
  * (type et nom ; le type par défaut se déduit de la forme : polygone = parcelle, ligne = clôture).
  */
 function register(layer, id = uid(), props = {}) {
-  const shape = isPolygon(layer) ? 'polygon' : 'line';
-  const kind = KINDS.includes(props.kind) && LINE_KINDS.includes(props.kind) === (shape === 'line') ? props.kind : (shape === 'polygon' ? 'field' : 'line');
+  const shape = isMarker(layer) ? 'point' : isPolygon(layer) ? 'polygon' : 'line';
+  const kind = shape === 'point' ? 'energizer'
+    : KINDS.includes(props.kind) && props.kind !== 'energizer' && LINE_KINDS.includes(props.kind) === (shape === 'line') ? props.kind
+      : (shape === 'polygon' ? 'field' : 'line');
+  if (shape === 'point') {
+    layer.setIcon(energizerIcon(false)); layer._sel = false;
+    layer.options.bubblingMouseEvents = true; // le clic remonte à la carte : sélection commune (hitTest)
+  }
   const color = kind === 'line' && /^#[0-9a-f]{6}$/i.test(props.color ?? '') ? props.color : null;
   layer.feature = { type: 'Feature', properties: { id, kind, ...(props.name ? { name: String(props.name) } : {}), ...(color ? { color } : {}) }, geometry: null };
   byId.set(id, layer);
   if (!drawn.hasLayer(layer)) drawn.addLayer(layer);
   // en Conception, la sélection passe par un clic sur la carte (voir pickAt)
-  layer.on('click', () => { if (state.mode === 'field' && kindOf(layer) === 'line') pickLine(`u:${L.stamp(layer)}`); });
+  layer.on('click', (e) => {
+    if (state.mode !== 'field') return;
+    if (kindOf(layer) === 'line') pickLine(`u:${L.stamp(layer)}`);
+    // en Terrain, l'électrificateur ouvre sa fenêtre (et le clic ne déplace pas la position simulée)
+    if (kindOf(layer) === 'energizer') { L.DomEvent.stopPropagation(e); openEnergizer(layer); }
+  });
   // dernière forme acceptée (clôture temporaire : 280 m au plus) ; copie, car Geoman modifie les points en place
   const copy = (ll) => (Array.isArray(ll) ? ll.map(copy) : L.latLng(ll.lat, ll.lng));
-  layer._good = copy(layer.getLatLngs());
-  ['pm:edit', 'pm:dragend', 'pm:vertexadded', 'pm:vertexremoved'].forEach((ev) => layer.on(ev, () => {
+  layer._good = isMarker(layer) ? null : copy(layer.getLatLngs());
+  ['pm:edit', 'pm:dragend', 'pm:vertexadded', 'pm:vertexremoved', 'dragend'].forEach((ev) => layer.on(ev, () => {
     if (kindOf(layer) === 'line' && lengthLL(ringOf(layer)) > MAX_TEMP + 0.01) {
       // modification refusée : on revient à la forme précédente
       layer.setLatLngs(layer._good);
@@ -167,7 +191,7 @@ function register(layer, id = uid(), props = {}) {
       toast(`Une clôture temporaire mesure ${MAX_TEMP} m au plus.`);
       return;
     }
-    layer._good = copy(layer.getLatLngs());
+    if (!isMarker(layer)) layer._good = copy(layer.getLatLngs());
     syncLayer(layer); refresh();
   }));
   applyTool(layer, tool);
@@ -362,7 +386,7 @@ map.on('mousemove', () => {
 // ---------------------------------------------------------------- barre d'outils (Conception)
 // Un seul outil actif à la fois. Modifier / Déplacer / Supprimer agissent sur la sélection :
 // on active Geoman objet par objet plutôt qu'en mode global.
-const DRAW_TOOLS = { polygon: 'Polygon', obstacle: 'Polygon', line: 'Line', permanent: 'Line', cut: 'Line' };
+const DRAW_TOOLS = { polygon: 'Polygon', obstacle: 'Polygon', line: 'Line', permanent: 'Line', cut: 'Line', energizer: 'Marker' };
 const TOOL_KEEPS_SELECTION = new Set(['merge']);
 // outils pendant lesquels les repères virtuels attirent le curseur (accrochage Geoman)
 const SNAP_TO_MARKS = new Set(['line', 'edit:line', 'permanent', 'edit:permanent']);
@@ -373,6 +397,8 @@ const TOOL_HINTS = {
   permanent: 'Clôture permanente : cliquez ses points, puis à nouveau le dernier point pour terminer.',
   'edit:permanent': 'Déplacez les points de la clôture.',
   'drag:permanent': 'Faites glisser la clôture pour la déplacer.',
+  energizer: 'Cliquez pour placer l\'électrificateur (il s\'accroche aux clôtures).',
+  'drag:energizer': 'Faites glisser l\'électrificateur pour le déplacer.',
   cut: 'Tracez le trait de coupe à travers la parcelle, puis terminez sur le dernier point.',
   merge: 'Cliquez les autres parcelles à fusionner, puis à nouveau sur Fusionner.',
   reference: 'Cliquez un polygone de la couche de référence pour créer une parcelle.',
@@ -388,6 +414,10 @@ const TOOL_HINTS = {
 function applyTool(layer, t) {
   if (!layer.pm) return;
   const kind = kindOf(layer), mine = state.sel.has(layer);
+  if (isMarker(layer)) { // un point se déplace en le faisant glisser (Geoman : accrochage aux clôtures)
+    if (mine && t === 'drag:energizer') layer.pm.enable({ snappable: true, draggable: true }); else if (layer.pm.enabled()) layer.pm.disable();
+    return;
+  }
   if (mine && t === `edit:${kind}`) layer.pm.enable({ snappable: true }); else if (layer.pm.enabled()) layer.pm.disable();
   if (mine && t === `drag:${kind}`) layer.pm.enableLayerDrag(); else if (layer.pm.layerDragEnabled?.()) layer.pm.disableLayerDrag();
 }
@@ -402,7 +432,9 @@ function setTool(next) {
   if (DRAW_TOOLS[next] && next !== 'cut' || next === 'reference') { state.sel.clear(); state.selMarks = false; }
   drawn.eachLayer((l) => applyTool(l, next));
   if (next === 'cut') cutting = selected().find(isField) ?? null;
-  if (DRAW_TOOLS[next]) map.pm.enableDraw(DRAW_TOOLS[next], { snappable: true });
+  if (DRAW_TOOLS[next]) {
+    map.pm.enableDraw(DRAW_TOOLS[next], { snappable: true, ...(next === 'energizer' ? { markerStyle: { icon: energizerIcon(false) }, continueDrawing: false } : {}) });
+  }
   map.getContainer().classList.toggle('tool-reference', tool === 'reference');
   if (tool) toast(TOOL_HINTS[tool]);
   styleDrawn();
@@ -451,6 +483,9 @@ toolbar = createToolbar(map, [
   { id: 'fences', title: 'Clôtures', color: '#00acc1', buttons: [
     { id: 'permanent', title: 'Dessiner une clôture naturelle ou permanente', text: '━', color: STYLE.permanent.color, onClick: () => setTool('permanent') },
     { id: 'line', title: 'Dessiner une clôture temporaire (280 m au plus)', text: '┅', color: '#00a5bd', onClick: () => setTool('line') },
+    { id: 'energizer', title: 'Placer un électrificateur', text: '⚡', onClick: () => setTool('energizer') },
+    { id: 'drag:energizer', title: 'Déplacer l\'électrificateur', icon: 'drag', onClick: () => setTool('drag:energizer') },
+    { id: 'remove:energizer', title: 'Supprimer la sélection', icon: 'delete', onClick: deleteSelection },
     { id: 'switch-fence', title: 'Changer de type (permanente ↔ temporaire)', text: '⇄', onClick: switchFenceKind },
     { id: 'edit:line', title: 'Modifier la clôture', icon: 'edit', onClick: () => setTool('edit:line') },
     { id: 'drag:line', title: 'Déplacer la clôture', icon: 'drag', onClick: () => setTool('drag:line') },
@@ -470,7 +505,26 @@ const RENAMABLE = {
   obstacle: { unnamed: 'Obstacle sans nom', question: 'Nom de l\'obstacle :' },
   line: { unnamed: 'Clôture temporaire sans nom', question: 'Nom de la clôture :' },
   permanent: { unnamed: 'Clôture permanente sans nom', question: 'Nom de la clôture :' },
+  energizer: { unnamed: 'Électrificateur sans nom', question: 'Nom de l\'électrificateur :' },
 };
+
+/** Clôture la plus proche d'un point : « sur … » ou « à 12 m de … ». */
+function fenceNear(latlng) {
+  const pt = map.latLngToLayerPoint(latlng);
+  let best = null;
+  for (const l of allFences()) {
+    const pts = l.getLatLngs().map((p) => map.latLngToLayerPoint(p));
+    for (let i = 1; i < pts.length; i++) {
+      const q = L.LineUtil.closestPointOnSegment(pt, pts[i - 1], pts[i]);
+      const d = map.distance(latlng, map.layerPointToLatLng(q));
+      if (!best || d < best.d) best = { l, d };
+    }
+  }
+  if (!best) return 'aucune clôture';
+  const i = allFences().filter((l) => kindOf(l) === kindOf(best.l)).indexOf(best.l) + 1;
+  const name = nameOf(best.l) || `${kindOf(best.l) === 'line' ? 'clôture' : 'clôture permanente'} ${i}`;
+  return best.d < 1 ? `sur « ${escapeHtml(name)} »` : `à ${formatLength(best.d)} de « ${escapeHtml(name)} »`;
+}
 
 /** Fenêtre des couleurs d'une clôture temporaire. */
 function openColors(layer) {
@@ -514,7 +568,8 @@ function updateToolbar() {
   if (!toolbar) return;
   const kind = selKind(), n = selected().length;
   const show = {
-    reference: true, polygon: true, obstacle: true, line: true, permanent: true, generate: fields().length > 0,
+    reference: true, polygon: true, obstacle: true, line: true, permanent: true, energizer: true, generate: fields().length > 0,
+    'drag:energizer': kind === 'energizer' && n === 1, 'remove:energizer': kind === 'energizer',
     'switch-fence': kind === 'line' || kind === 'permanent',
     merge: kind === 'field',
     cut: kind === 'field' && n === 1,
@@ -532,7 +587,11 @@ function updateToolbar() {
   let info = '';
   const renamable = RENAMABLE[kind] && sel.length === 1;
   const isFence = LINE_KINDS.includes(kind);
-  if (renamable) {
+  if (renamable && kind === 'energizer') {
+    const name = nameOf(sel[0]);
+    info = `⚡ <span class="info-name${name ? '' : ' empty'}">${escapeHtml(name || RENAMABLE[kind].unnamed)} ✎</span> · ${fenceNear(sel[0].getLatLng())}`;
+  } else if (kind === 'energizer') info = `${sel.length} électrificateurs`;
+  else if (renamable) {
     const r = ringOf(sel[0]), name = nameOf(sel[0]);
     const len = lengthLL(r);
     const rest = kind !== 'line' ? '' : len > MAX_TEMP + 0.01 ? ` · <span class="warn-text">plus de ${MAX_TEMP} m</span>` : ` · reste ${fmtM(Math.max(0, MAX_TEMP - len))} m`;
@@ -936,7 +995,7 @@ function loadFeatures(fc, { keepIds = false } = {}) {
   });
   let n = 0;
   for (const [f, l] of layers) {
-    if (!(l instanceof L.Polyline)) continue;
+    if (!(l instanceof L.Polyline) && !isMarker(l)) continue;
     register(l, keepIds && f.properties?.id ? f.properties.id : uid(), f.properties ?? {});
     syncLayer(l); n++;
   }
@@ -1152,6 +1211,7 @@ function render() {
       ...drawn.getLayers().filter((l) => kindOf(l) === 'permanent').map((l) => ({ pts: ringOf(l).map((ll) => cam(prep.proj.toXY(ll))), color: STYLE.permanent.color })),
       ...obstacles().map((l) => ({ pts: ringOf(l).map((ll) => cam(prep.proj.toXY(ll))), color: STYLE.obstacle.color, closed: true, dash: [8, 6] })),
     ],
+    energizers: energizers().map((l) => { const p = l.getLatLng(); return cam(prep.proj.toXY([p.lng, p.lat])); }),
     origin: cam(prep.proj.toXY(pointAt(prep, loc.along))),
     dir: toCameraFrame([Math.sin(b), Math.cos(b)], view),
     along: loc.along, level,
@@ -1176,8 +1236,52 @@ function onPos(pos) {
   $('st-acc-label').textContent = pos.qualityLabel || 'précision GPS';
   if (!gps.centered) { map.setView(ll, Math.max(map.getZoom(), 19)); gps.centered = true; }
   else if (!map.getBounds().pad(-0.25).contains(ll)) map.panTo(ll);
+  showNearestEnergizer();
   update();
 }
+
+// ---------------------------------------------------------------- électrificateurs en Terrain
+/** Distance au plus proche électrificateur, sous les boutons du guidage. */
+function showNearestEnergizer() {
+  const list = energizers();
+  if (!gps.last || !list.length) { $('energizer-near').textContent = ''; return; }
+  const here = L.latLng(gps.last[1], gps.last[0]);
+  const best = list.map((l) => ({ l, d: here.distanceTo(l.getLatLng()) })).sort((a, b) => a.d - b.d)[0];
+  $('energizer-near').textContent = `Le plus proche${nameOf(best.l) ? ` (${nameOf(best.l)})` : ''} : ${formatLength(best.d)}`;
+}
+const here = () => (gps.last ? L.latLng(gps.last[1], gps.last[0]) : null);
+$('btn-energizer-here').addEventListener('click', () => {
+  if (!here()) return toast('Démarrez le GPS (ou la simulation) pour connaître votre position.');
+  const m = L.marker(here());
+  register(m); syncLayer(m); refresh(); showNearestEnergizer();
+  toast('Électrificateur placé à votre position.');
+});
+let energizerOpen = null; // électrificateur affiché dans la fenêtre
+function openEnergizer(layer) {
+  energizerOpen = layer;
+  $('energizer-title').textContent = `⚡ ${nameOf(layer) || 'Électrificateur sans nom'}`;
+  const d = here() ? ` · à ${formatLength(here().distanceTo(layer.getLatLng()))} de vous` : '';
+  $('energizer-where').innerHTML = fenceNear(layer.getLatLng()) + d;
+  $('btn-energizer-move').disabled = !here();
+  openDialog('dlg-energizer');
+}
+$('btn-energizer-move').addEventListener('click', () => {
+  if (!energizerOpen || !here()) return;
+  energizerOpen.setLatLng(here()); syncLayer(energizerOpen); refresh(); showNearestEnergizer();
+  $('dlg-energizer').close(); toast('Électrificateur déplacé à votre position.');
+});
+$('btn-energizer-rename').addEventListener('click', () => {
+  if (!energizerOpen) return;
+  const name = prompt('Nom de l\'électrificateur :', nameOf(energizerOpen));
+  if (name == null) return;
+  if (name.trim()) energizerOpen.feature.properties.name = name.trim(); else delete energizerOpen.feature.properties.name;
+  syncLayer(energizerOpen); refresh(); openEnergizer(energizerOpen);
+});
+$('btn-energizer-delete').addEventListener('click', () => {
+  if (!energizerOpen || !confirm('Supprimer cet électrificateur ?')) return;
+  drawn.removeLayer(energizerOpen); energizerOpen = null;
+  $('dlg-energizer').close(); showNearestEnergizer(); toast('Électrificateur supprimé.');
+});
 
 /** Boussole du téléphone : à lancer sur une action de l'utilisateur (autorisation sur iPhone). */
 async function startCompassOnce() {
