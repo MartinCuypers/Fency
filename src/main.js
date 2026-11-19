@@ -646,24 +646,32 @@ const params = () => ({
   perimeter: $('gen-perimeter').checked,
   offset: num('gen-offset'),
   sec: {
-    on: $('sec-on').checked, mode: $('sec-mode').value, value: num('sec-value'),
+    on: $('sec-on').checked, mode: $('sec-mode').value, value: num('sec-value'), capL: $('sec-cap').checked,
     angle: parseInt($('sec-angle').value, 10), offset: num('sec-offset'),
   },
 });
 
 /**
- * Quadrillage demandé : espacement a des lignes principales (null en mode surface), espacement b
- * des secondaires, angle entre les deux familles. `problem` explique pourquoi il manque quelque chose.
+ * Quadrillage demandé. Lignes secondaires :
+ *  - en largeur (m), sans plafond : lignes continues d'espacement fixe ;
+ *  - en surface de paddock, ou avec le plafond « L de 280 m » : placées bande par bande
+ *    (spacingFor), car l'espacement dépend de la largeur de chaque bande principale.
+ * `a` : espacement des principales s'il est fixe ; `problem` : pourquoi il n'y a pas de secondaires.
  */
 function gridOf(p) {
   const a = p.mode === 'width' && p.value > 0 ? p.value : null;
-  if (!p.sec.on) return { a, b: null };
+  if (!p.sec.on) return { a };
   const between = p.sec.angle - p.angle, sin = Math.abs(Math.sin(between * Math.PI / 180));
-  if (sin < 0.05) return { a, b: null, between, problem: 'Les lignes secondaires sont presque parallèles aux principales.' };
-  if (p.sec.mode === 'width') return { a, b: p.sec.value > 0 ? p.sec.value : null, between };
-  // surface de paddock : l'espacement des secondaires découle de celui des principales
-  if (!a) return { a, b: null, between, problem: 'La surface de paddock demande des lignes principales espacées en mètres.' };
-  return { a, b: (p.sec.value * 100 * sin) / a, between };
+  if (sin < 0.05) return { a, between, problem: 'Les lignes secondaires sont presque parallèles aux principales.' };
+  if (!(p.sec.value > 0)) return { a, between };
+  const wanted = (w) => (p.sec.mode === 'width' ? p.sec.value : (p.sec.value * 100 * sin) / w);
+  const cap = (w) => L_FENCE * sin - w; // espacement maximal pour qu'une L de 280 m ferme le paddock
+  const perStrip = p.sec.mode === 'paddock' || p.sec.capL;
+  const spacingFor = (w) => {
+    const b = p.sec.capL ? Math.min(wanted(w), cap(w)) : wanted(w);
+    return b >= 1 ? b : null;
+  };
+  return { a, between, sin, wanted, cap, perStrip, spacingFor, capL: p.sec.capL, b: perStrip ? null : p.sec.value };
 }
 
 const MARK_STYLE = {
@@ -674,7 +682,7 @@ const MARK_STYLE = {
 
 function regenerate() {
   generated.clearLayers();
-  state.genLines = []; state.strips = [];
+  state.genLines = []; state.strips = []; state.paddocks = [];
   const field = currentField();
   if (!state.genActive || !field) return;
   const p = params(), grid = gridOf(p);
@@ -682,9 +690,12 @@ function regenerate() {
   const res = generateGrid(ring, {
     holes: obstacles().map(ringOf),
     primary: { bearing: p.angle, mode: p.mode, reverse: p.reverse, offset: p.mode === 'width' ? p.offset : 0, value: p.mode === 'area' ? p.value * 100 : p.value },
-    secondary: grid.b ? { bearing: p.sec.angle, mode: 'width', value: grid.b, offset: p.sec.offset } : null,
+    secondary: grid.spacingFor && !grid.problem
+      ? { bearing: p.sec.angle, mode: 'width', value: grid.b ?? 1, offset: p.sec.offset, ...(grid.perStrip ? { spacingFor: grid.spacingFor } : {}) }
+      : null,
   });
   state.strips = res.strips;
+  state.paddocks = res.paddocks;
   res.lines.forEach((l, i) => state.genLines.push({ id: `g:${i}`, coords: l.coords, length: l.length, label: `Repère ${l.strip}` }));
   res.secondary.forEach((l, i) => state.genLines.push({ id: `s:${i}`, coords: l.coords, length: l.length, label: `Repère secondaire ${l.strip}` }));
   if (p.perimeter) {
@@ -710,7 +721,7 @@ function renderMarksPanel() {
   $('gen-offset-box').hidden = p.mode !== 'width';
   $('gen-offset').max = Math.max(1, p.value || 1);
   $('gen-offset-val').textContent = `${num('gen-offset')} m`;
-  $('sec-offset').max = Math.max(1, Math.round(grid.b ?? p.sec.value) || 1);
+  $('sec-offset').max = Math.max(1, Math.round(grid.b ?? Math.max(1, ...(state.paddocks ?? []).map((d) => d.spacing || 0))) || 1);
   $('sec-offset-val').textContent = `${num('sec-offset')} m`;
   $('sec-box').hidden = !p.sec.on;
   $('marks-field').innerHTML = f
@@ -718,6 +729,7 @@ function renderMarksPanel() {
     : 'Sélectionnez ou dessinez d\'abord une parcelle.';
   let info = '';
   if (grid.problem) info = `<span class="warn-text">${grid.problem}</span>`;
+  else if (grid.perStrip && state.paddocks?.length) info = paddockSummary(grid);
   else if (grid.a && grid.b) {
     const pad = paddockOf(grid.a, grid.b, grid.between), ok = Math.abs(pad.lFence - L_FENCE) < 0.5;
     info = `Paddock : <b>${fmtM(grid.a)} × ${fmtM(grid.b)} m</b> · ${formatArea(pad.area)}<br>
@@ -730,6 +742,24 @@ function renderMarksPanel() {
     : '';
 }
 const fmtM = (v) => (Math.round(v * 10) / 10).toLocaleString('fr-FR');
+const range = (vals, fmt) => { const lo = Math.min(...vals), hi = Math.max(...vals); return fmt(lo) === fmt(hi) ? fmt(lo) : `${fmt(lo)} à ${fmt(hi)}`; };
+
+/** Résumé des paddocks quand les secondaires sont placées bande par bande. */
+function paddockSummary(grid) {
+  // seules comptent les bandes réellement divisées (une bande de bord très étroite peut demander
+  // un espacement plus grand que le champ : elle n'a alors aucune ligne secondaire)
+  const pads = state.paddocks.filter((d) => d.spacing > 0 && d.lines > 0).map((d) => ({
+    ...d, ...paddockOf(d.width, d.spacing, grid.between), capped: d.spacing < grid.wanted(d.width) - 0.05,
+  }));
+  const none = state.paddocks.filter((d) => !(d.spacing > 0)).length, capped = pads.filter((d) => d.capped).length;
+  if (!pads.length) return `<span class="warn-text">Aucune ligne secondaire possible : bandes trop larges pour une L de ${L_FENCE} m.</span>`;
+  const lMax = Math.max(...pads.map((d) => d.lFence)), ok = lMax <= L_FENCE + 0.5;
+  return `Paddocks : <b>${range(pads.map((d) => d.area), formatArea)}</b><br>
+    Clôture en L : <b class="${ok ? 'ok-text' : 'warn-text'}">${range(pads.map((d) => d.lFence), (v) => `${fmtM(v)} m`)}</b> ${ok ? '✔' : `(plus que ${L_FENCE} m)`}
+    ${capped ? `<br><small>${capped} bande${capped > 1 ? 's' : ''} : paddocks réduits pour tenir dans une L de ${L_FENCE} m.</small>` : ''}
+    ${!ok && grid.a && !grid.capL ? `<div class="row"><button id="btn-fit-l">Ajuster pour une L de ${L_FENCE} m</button></div>` : ''}
+    ${none ? `<br><small class="warn-text">${none} bande${none > 1 ? 's' : ''} sans ligne secondaire (plus large${none > 1 ? 's' : ''} qu'une L de ${L_FENCE} m ne le permet).</small>` : ''}`;
+}
 
 // ---------------------------------------------------------------- clôtures à poser (guidage)
 // Seules les clôtures dessinées servent au guidage : les repères virtuels n'aident qu'à les tracer.
@@ -761,7 +791,7 @@ const setLabels = () => {
 };
 $('gen-mode').addEventListener('change', () => { $('gen-value').value = $('gen-mode').value === 'area' ? 30 : 20; setLabels(); refresh(); });
 $('sec-mode').addEventListener('change', () => { $('sec-value').value = 100; setLabels(); refresh(); });
-['gen-value', 'gen-angle', 'gen-reverse', 'gen-perimeter', 'gen-offset', 'sec-value', 'sec-angle', 'sec-offset']
+['gen-value', 'gen-angle', 'gen-reverse', 'gen-perimeter', 'gen-offset', 'sec-value', 'sec-angle', 'sec-offset', 'sec-cap']
   .forEach((id) => $(id).addEventListener('input', () => refresh()));
 const perpendicular = () => { $('sec-angle').value = (parseInt($('gen-angle').value, 10) + 90) % 180; };
 $('sec-on').addEventListener('change', () => { if ($('sec-on').checked && !state.secTouched) perpendicular(); state.secTouched = true; refresh(); });
@@ -769,7 +799,11 @@ $('btn-sec-perp').addEventListener('click', () => { perpendicular(); refresh(); 
 $('grid-info').addEventListener('click', (e) => {
   if (e.target.id !== 'btn-fit-l') return;
   // garde la surface du paddock, et trouve les espacements qui donnent une clôture en L de 280 m
-  const p = params(), grid = gridOf(p), pad = paddockOf(grid.a, grid.b, grid.between);
+  const p = params(), grid = gridOf(p);
+  if (!grid.a) return;
+  // surface de paddock visée : la consigne en mode surface, sinon celle du paddock actuel
+  const pad = p.sec.mode === 'paddock' ? { area: p.sec.value * 100 } : grid.b ? paddockOf(grid.a, grid.b, grid.between) : null;
+  if (!pad) return;
   const { fit, maxArea } = fitPaddock(pad.area, grid.between, { near: grid.a });
   if (!fit) return toast(`Paddock trop grand pour une clôture en L de ${L_FENCE} m (maximum ${formatArea(maxArea)}).`);
   const sin = Math.abs(Math.sin(grid.between * Math.PI / 180));
@@ -871,6 +905,7 @@ function applyParams(p) {
   $('sec-value').value = sec.value ?? 100;
   $('sec-angle').value = sec.angle ?? ((($('gen-angle').value | 0) + 90) % 180);
   $('sec-offset').value = sec.offset ?? 0;
+  $('sec-cap').checked = !!sec.capL;
   setLabels();
 }
 

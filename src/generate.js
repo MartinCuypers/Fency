@@ -96,7 +96,11 @@ export function generateStrips(ring, { bearing = 0, mode = 'width', value = 20, 
       lines.push({ coords, length: u2 - u1, strip: i + 1 });
     }
   });
-  return { lines, strips, totalArea: holesUV.length ? cum[N] : polygonAreaXY(xy) };
+  return {
+    lines, strips, totalArea: holesUV.length ? cum[N] : polygonAreaXY(xy),
+    // pour placer d'autres lignes bande par bande : limites des bandes (v) et position v d'un point x,y
+    bounds, proj, vOf: (p) => toUV(p)[1],
+  };
 }
 
 /** Longueur de la clôture en L qui ferme un paddock du quadrillage (fixée par l'enrouleur Kiwitech). */
@@ -106,35 +110,74 @@ export const L_FENCE = 280;
  * Quadrillage de repères : lignes principales et, en option, lignes secondaires d'une autre direction.
  * Les croisements sont insérés comme sommets des lignes : ils deviennent des points d'accroche.
  * @param primary   options de generateStrips pour les lignes principales
- * @param secondary options de generateStrips pour les lignes secondaires (ou null)
- * @returns {lines, strips, totalArea, secondary: [{coords,length,strip}]}
+ * @param secondary options de generateStrips pour les lignes secondaires (ou null), plus :
+ *   - spacingFor(a) : si présent, lignes placées bande par bande, avec un espacement propre à chaque
+ *     bande principale de largeur a (null : pas de ligne secondaire dans cette bande)
+ * @returns {lines, strips, totalArea, secondary: [{coords,length,strip}], paddocks: [{strip,width,spacing,lines}]}
  */
 export function generateGrid(ring, { primary, secondary = null, holes = [] }) {
   const a = generateStrips(ring, { ...primary, holes });
-  if (!secondary) return { ...a, secondary: [] };
-  const b = generateStrips(ring, { ...secondary, holes });
-  const r = openRing(ring);
-  if (r.length >= 3) insertCrossings(a.lines, b.lines, makeProjection(centroidLL(r)));
-  return { ...a, secondary: b.lines };
+  const out = { lines: a.lines, strips: a.strips, totalArea: a.totalArea, secondary: [], paddocks: [] };
+  if (!secondary || !a.proj) return out;
+  if (!secondary.spacingFor) {
+    out.secondary = generateStrips(ring, { ...secondary, holes }).lines;
+  } else {
+    const cache = new Map(); // même espacement, mêmes lignes : on ne les calcule qu'une fois
+    for (let i = 0; i + 1 < a.bounds.length; i++) {
+      const v0 = a.bounds[i], v1 = a.bounds[i + 1], width = v1 - v0;
+      const spacing = secondary.spacingFor(width);
+      const pad = { strip: i + 1, width, spacing, lines: 0 };
+      out.paddocks.push(pad);
+      if (!(spacing > 0)) continue;
+      const key = spacing.toFixed(3);
+      if (!cache.has(key)) cache.set(key, generateStrips(ring, { ...secondary, value: spacing, holes }).lines);
+      for (const l of cache.get(key)) {
+        const seg = clipToBand(l.coords.map(a.proj.toXY), a.vOf, v0, v1);
+        if (seg) pad.lines++;
+        if (seg) out.secondary.push({ coords: seg.map(a.proj.toLL), length: Math.hypot(seg[1][0] - seg[0][0], seg[1][1] - seg[0][1]), strip: l.strip, band: i + 1 });
+      }
+    }
+  }
+  insertCrossings(out.lines, out.secondary, a.proj);
+  return out;
 }
 
-/** Ajoute aux lignes (segments de 2 points) les points où elles se croisent. */
+/** Partie d'un segment [P, Q] (coordonnées x,y) comprise entre les droites v = v0 et v = v1. */
+function clipToBand([P, Q], vOf, v0, v1) {
+  const vp = vOf(P), vq = vOf(Q);
+  let t0 = 0, t1 = 1;
+  if (Math.abs(vq - vp) < 1e-9) { if (vp < v0 || vp > v1) return null; } else {
+    const ta = (v0 - vp) / (vq - vp), tb = (v1 - vp) / (vq - vp);
+    t0 = Math.max(0, Math.min(ta, tb)); t1 = Math.min(1, Math.max(ta, tb));
+  }
+  if (t1 - t0 < 1e-6) return null;
+  const at = (t) => [P[0] + t * (Q[0] - P[0]), P[1] + t * (Q[1] - P[1])];
+  const seg = [at(t0), at(t1)];
+  return Math.hypot(seg[1][0] - seg[0][0], seg[1][1] - seg[0][1]) < 0.5 ? null : seg;
+}
+
+/**
+ * Ajoute aux lignes (segments de 2 points) les points où elles se croisent. Une ligne secondaire
+ * qui s'arrête sur une ligne principale y ajoute aussi un sommet (sur la principale seulement).
+ */
 function insertCrossings(as, bs, proj) {
   const xyA = as.map((l) => l.coords.map(proj.toXY)), xyB = bs.map((l) => l.coords.map(proj.toXY));
   const cutsA = as.map(() => []), cutsB = bs.map(() => []);
+  const E = 1e-6;
   xyA.forEach(([p, p2], i) => xyB.forEach(([q, q2], j) => {
     const rx = p2[0] - p[0], ry = p2[1] - p[1], sx = q2[0] - q[0], sy = q2[1] - q[1];
     const den = rx * sy - ry * sx;
     if (Math.abs(den) < 1e-9) return; // parallèles
     const t = ((q[0] - p[0]) * sy - (q[1] - p[1]) * sx) / den, u = ((q[0] - p[0]) * ry - (q[1] - p[1]) * rx) / den;
-    if (t <= 1e-6 || t >= 1 - 1e-6 || u <= 1e-6 || u >= 1 - 1e-6) return;
+    if (t <= E || t >= 1 - E || u < -1e-4 || u > 1 + 1e-4) return;
     const x = [p[0] + t * rx, p[1] + t * ry];
-    cutsA[i].push([t, x]); cutsB[j].push([u, x]);
+    cutsA[i].push([t, x]);
+    if (u > E && u < 1 - E) cutsB[j].push([u, x]);
   }));
   const rebuild = (lines, cuts) => lines.forEach((l, i) => {
     if (!cuts[i].length) return;
-    const pts = cuts[i].sort((m, n) => m[0] - n[0]).map(([, x]) => proj.toLL(x));
-    l.coords = [l.coords[0], ...pts, l.coords[1]];
+    const sorted = cuts[i].sort((m, n) => m[0] - n[0]).filter((c, k, arr) => !k || c[0] - arr[k - 1][0] > 1e-7);
+    l.coords = [l.coords[0], ...sorted.map(([, x]) => proj.toLL(x)), l.coords[1]];
   });
   rebuild(as, cutsA); rebuild(bs, cutsB);
 }

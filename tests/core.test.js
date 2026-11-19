@@ -86,6 +86,21 @@ test('quadrillage : lignes secondaires et croisements insérés comme sommets', 
   assert.ok(Math.abs(x - 50) < 0.01 && Math.abs(y - 25) < 0.01);
 });
 
+test('lignes secondaires bande par bande : espacement propre à chaque bande', () => {
+  // bandes principales de 25 m ; secondaires de 50 m, sauf la 2e bande (pas de secondaire)
+  const g = generateGrid(rect, {
+    primary: { bearing: 90, value: 25 },
+    secondary: { bearing: 0, value: 50, spacingFor: (a) => (a > 24 ? 50 : null) },
+  });
+  assert.equal(g.paddocks.length, 4);
+  assert.equal(g.secondary.length, 12); // 3 lignes x 4 bandes
+  for (const l of g.secondary) assert.ok(Math.abs(l.length - 25) < 0.01);
+  // chaque ligne principale reçoit les extrémités des segments secondaires qui s'y arrêtent
+  for (const l of g.lines) assert.equal(l.coords.length, 5);
+  const none = generateGrid(rect, { primary: { bearing: 90, value: 25 }, secondary: { bearing: 0, value: 50, spacingFor: (a) => null } });
+  assert.equal(none.secondary.length, 0);
+});
+
 test('paddock et clôture en L de 280 m', () => {
   assert.deepEqual(paddockOf(100, 180, 90), { area: 18000, lFence: 280 });
   const { fit } = fitPaddock(18000, 90, { near: 90 });
