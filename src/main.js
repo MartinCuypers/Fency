@@ -93,11 +93,16 @@ const ringOf = (layer) => {
   while (Array.isArray(ll[0])) ll = ll[0];
   return ll.map((p) => [p.lng, p.lat]);
 };
-const isField = (l) => l instanceof L.Polygon;
-const kindOf = (l) => (isField(l) ? 'field' : 'line');
+// Types d'objets dessinés : parcelle ('field'), obstacle (polygone exclu des repères) et clôture ('line').
+const KINDS = ['field', 'obstacle', 'line'];
+const isPolygon = (l) => l instanceof L.Polygon;
+const kindOf = (l) => l.feature?.properties?.kind ?? (isPolygon(l) ? 'field' : 'line');
+const isField = (l) => kindOf(l) === 'field';
+const isObstacle = (l) => kindOf(l) === 'obstacle';
 const nameOf = (l) => l.feature?.properties?.name ?? '';
 const fields = () => drawn.getLayers().filter(isField);
-const userLines = () => drawn.getLayers().filter((l) => !isField(l) && l instanceof L.Polyline);
+const obstacles = () => drawn.getLayers().filter(isObstacle);
+const userLines = () => drawn.getLayers().filter((l) => kindOf(l) === 'line');
 const currentField = () => (state.selected && drawn.hasLayer(state.selected) ? state.selected : fields().slice(-1)[0] || null);
 const selected = () => [...state.sel].filter((l) => drawn.hasLayer(l));
 /** Type de la sélection : 'field', 'line', 'marks' ou null. */
@@ -106,12 +111,14 @@ const selKind = () => (state.selMarks ? 'marks' : selected()[0] ? kindOf(selecte
 const STYLE = {
   field: { color: '#ffeb3b', weight: 3, fillColor: '#ffeb3b', fillOpacity: 0.08 },
   fieldSel: { color: '#ff9800', weight: 4, fillColor: '#ff9800', fillOpacity: 0.12 },
+  obstacle: { color: '#d84315', weight: 2, dashArray: '6 4', fillColor: '#3e2723', fillOpacity: 0.45 },
+  obstacleSel: { color: '#ff9800', weight: 4, dashArray: null, fillColor: '#3e2723', fillOpacity: 0.55 },
   line: { color: '#00e5ff', weight: 4 },
   lineSel: { color: '#2979ff', weight: 7 },
 };
 
 function styleDrawn() {
-  drawn.eachLayer((l) => l.setStyle(isField(l) ? (state.sel.has(l) ? STYLE.fieldSel : STYLE.field) : (state.sel.has(l) ? STYLE.lineSel : STYLE.line)));
+  drawn.eachLayer((l) => { const k = kindOf(l); l.setStyle(STYLE[state.sel.has(l) ? `${k}Sel` : k]); });
   generated.eachLayer((l) => l.setStyle({ weight: state.selMarks ? 6 : l.options.baseWeight }));
   updateToolbar();
 }
@@ -125,11 +132,12 @@ const featureOf = (layer) => layer.toGeoJSON(8); // 8 décimales ≈ 1 mm (le gu
 const syncLayer = (layer) => { if (!applying) session?.putFeature(featureOf(layer)); };
 
 /**
- * Enregistre un objet dessiné. `props` : propriétés venues du stockage ou d'un import
- * (seul le nom est repris ; id et type sont recalculés).
+ * Enregistre un objet dessiné. `props` : propriétés venues du stockage, d'un import ou de l'outil
+ * (type et nom ; le type par défaut se déduit de la forme : polygone = parcelle, ligne = clôture).
  */
 function register(layer, id = uid(), props = {}) {
-  const kind = isField(layer) ? 'field' : 'line';
+  const shape = isPolygon(layer) ? 'polygon' : 'line';
+  const kind = KINDS.includes(props.kind) && (props.kind === 'line') === (shape === 'line') ? props.kind : (shape === 'polygon' ? 'field' : 'line');
   layer.feature = { type: 'Feature', properties: { id, kind, ...(props.name ? { name: String(props.name) } : {}) }, geometry: null };
   byId.set(id, layer);
   if (!drawn.hasLayer(layer)) drawn.addLayer(layer);
@@ -146,7 +154,7 @@ map.on('pm:create', (e) => {
     cutting = null; e.layer.remove();
     return cutField(target, line);
   }
-  register(e.layer);
+  register(e.layer, uid(), { kind: tool === 'obstacle' ? 'obstacle' : undefined });
   syncLayer(e.layer);
   select([e.layer]);
   refresh();
@@ -236,9 +244,9 @@ function hitTest(latlng) {
   const lines = userLines().map((l) => ({ l, d: distToLine(pt, l) })).filter((c) => c.d <= HIT_PX);
   if (lines.length) return { layer: lines.sort((a, b) => a.d - b.d)[0].l };
   if (generated.getLayers().some((l) => distToLine(pt, l) <= HIT_PX)) return { marks: true };
-  // 3. surfaces : la plus petite qui contient le point
+  // 3. surfaces (parcelles, obstacles) : la plus petite qui contient le point
   const ll = [latlng.lng, latlng.lat];
-  const surf = fields().filter((l) => insideRing(ll, ringOf(l))).map((l) => ({ l, a: areaLL(ringOf(l)) }));
+  const surf = drawn.getLayers().filter(isPolygon).filter((l) => insideRing(ll, ringOf(l))).map((l) => ({ l, a: areaLL(ringOf(l)) }));
   if (surf.length) return { layer: surf.sort((a, b) => a.a - b.a)[0].l };
   return null;
 }
@@ -263,7 +271,7 @@ map.on('click', (e) => {
     }
     return;
   }
-  if (tool === 'edit:field' || tool === 'edit:line' || tool === 'drag:field' || tool === 'drag:line') {
+  if (/^(edit|drag):/.test(tool)) {
     if (!hit) select([]); // clic dans le vide : fin de la modification
     return;
   }
@@ -289,12 +297,13 @@ function deleteSelection() {
 // ---------------------------------------------------------------- barre d'outils (Conception)
 // Un seul outil actif à la fois. Modifier / Déplacer / Supprimer agissent sur la sélection :
 // on active Geoman objet par objet plutôt qu'en mode global.
-const DRAW_TOOLS = { polygon: 'Polygon', line: 'Line', cut: 'Line' };
+const DRAW_TOOLS = { polygon: 'Polygon', obstacle: 'Polygon', line: 'Line', cut: 'Line' };
 const TOOL_KEEPS_SELECTION = new Set(['merge']);
 // outils pendant lesquels les repères virtuels attirent le curseur (accrochage Geoman)
 const SNAP_TO_MARKS = new Set(['line', 'edit:line']);
 const TOOL_HINTS = {
   polygon: 'Cliquez les sommets de la parcelle, puis le premier point pour la fermer.',
+  obstacle: 'Cliquez les sommets de l\'obstacle, puis le premier point pour le fermer.',
   line: 'Cliquez les points de la clôture, puis à nouveau le dernier point pour terminer.',
   cut: 'Tracez le trait de coupe à travers la parcelle, puis terminez sur le dernier point.',
   merge: 'Cliquez les autres parcelles à fusionner, puis à nouveau sur Fusionner.',
@@ -303,6 +312,8 @@ const TOOL_HINTS = {
   'edit:line': 'Déplacez les points de la clôture.',
   'drag:field': 'Faites glisser la parcelle pour la déplacer.',
   'drag:line': 'Faites glisser la clôture pour la déplacer.',
+  'edit:obstacle': 'Déplacez les sommets de l\'obstacle.',
+  'drag:obstacle': 'Faites glisser l\'obstacle pour le déplacer.',
 };
 
 /** Met un objet dans l'état voulu par l'outil (édition des sommets, déplacement) : seulement s'il est sélectionné. */
@@ -320,7 +331,7 @@ function setTool(next) {
   tool = next;
   if (DRAW_TOOLS[prev]) { cutting = null; map.pm.disableDraw(); }
   generated.eachLayer((l) => { l.options.snapIgnore = !SNAP_TO_MARKS.has(next); }); // avant d'activer l'outil
-  if (next === 'polygon' || next === 'line' || next === 'reference') { state.sel.clear(); state.selMarks = false; }
+  if (DRAW_TOOLS[next] && next !== 'cut' || next === 'reference') { state.sel.clear(); state.selMarks = false; }
   drawn.eachLayer((l) => applyTool(l, next));
   if (next === 'cut') cutting = selected().find(isField) ?? null;
   if (DRAW_TOOLS[next]) map.pm.enableDraw(DRAW_TOOLS[next], { snappable: true });
@@ -360,6 +371,10 @@ toolbar = createToolbar(map, [
     { id: 'edit:field', title: 'Modifier la parcelle', icon: 'edit', onClick: () => setTool('edit:field') },
     { id: 'drag:field', title: 'Déplacer la parcelle', icon: 'drag', onClick: () => setTool('drag:field') },
     { id: 'remove:field', title: 'Supprimer la sélection', icon: 'delete', onClick: deleteSelection },
+    { id: 'obstacle', title: 'Dessiner un obstacle (exclu des repères)', text: '⊘', onClick: () => setTool('obstacle') },
+    { id: 'edit:obstacle', title: 'Modifier l\'obstacle', icon: 'edit', onClick: () => setTool('edit:obstacle') },
+    { id: 'drag:obstacle', title: 'Déplacer l\'obstacle', icon: 'drag', onClick: () => setTool('drag:obstacle') },
+    { id: 'remove:obstacle', title: 'Supprimer la sélection', icon: 'delete', onClick: deleteSelection },
   ] },
   { id: 'marks', title: 'Repères virtuels', color: '#e53935', buttons: [
     { id: 'generate', title: 'Générer les repères', text: '▤', onClick: openTool('dlg-generate') },
@@ -376,6 +391,12 @@ toolbar = createToolbar(map, [
   ] },
 ]);
 
+/** Objets que l'on nomme depuis la pastille du bas. */
+const RENAMABLE = {
+  field: { unnamed: 'Parcelle sans nom', question: 'Nom de la parcelle :' },
+  obstacle: { unnamed: 'Obstacle sans nom', question: 'Nom de l\'obstacle :' },
+};
+
 /**
  * N'affiche que les outils utilisables : ceux de création toujours, ceux qui agissent sur un objet
  * seulement quand la sélection s'y prête. Pendant un outil, on garde son bouton (pour en sortir).
@@ -384,10 +405,11 @@ function updateToolbar() {
   if (!toolbar) return;
   const kind = selKind(), n = selected().length;
   const show = {
-    reference: true, polygon: true, line: true, generate: fields().length > 0,
+    reference: true, polygon: true, obstacle: true, line: true, generate: fields().length > 0,
     merge: kind === 'field',
     cut: kind === 'field' && n === 1,
     'edit:field': kind === 'field' && n === 1, 'drag:field': kind === 'field' && n === 1, 'remove:field': kind === 'field',
+    'edit:obstacle': kind === 'obstacle' && n === 1, 'drag:obstacle': kind === 'obstacle' && n === 1, 'remove:obstacle': kind === 'obstacle',
     'edit:line': kind === 'line' && n === 1, 'drag:line': kind === 'line' && n === 1, 'remove:line': kind === 'line',
     'clear-gen': kind === 'marks',
   };
@@ -397,22 +419,25 @@ function updateToolbar() {
   // infos de la sélection, en bas de la carte
   const sel = selected();
   let info = '';
-  if (kind === 'field' && sel.length === 1) {
+  const renamable = RENAMABLE[kind] && sel.length === 1;
+  if (renamable) {
     const r = ringOf(sel[0]), name = nameOf(sel[0]);
-    info = `<span class="info-name${name ? '' : ' empty'}">${escapeHtml(name || 'Parcelle sans nom')} ✎</span> · <b>${formatArea(areaLL(r))}</b> · périmètre ${formatLength(lengthLL([...r, r[0]]))}`;
-  } else if (kind === 'field') info = `${sel.length} parcelles : <b>${formatArea(sel.reduce((t, l) => t + areaLL(ringOf(l)), 0))}</b>`;
+    info = `<span class="info-name${name ? '' : ' empty'}">${escapeHtml(name || RENAMABLE[kind].unnamed)} ✎</span> · <b>${formatArea(areaLL(r))}</b> · périmètre ${formatLength(lengthLL([...r, r[0]]))}`;
+  } else if (kind === 'field' || kind === 'obstacle') {
+    info = `${sel.length} ${kind === 'field' ? 'parcelles' : 'obstacles'} : <b>${formatArea(sel.reduce((t, l) => t + areaLL(ringOf(l)), 0))}</b>`;
+  }
   else if (kind === 'line') info = `${sel.length > 1 ? `${sel.length} clôtures` : 'Clôture'} : <b>${formatLength(sel.reduce((t, l) => t + lengthLL(ringOf(l)), 0))}</b>`;
   else if (kind === 'marks') info = `Repères virtuels : <b>${state.strips.length} bandes</b>`;
   $('field-info').innerHTML = info;
-  $('field-info').classList.toggle('renamable', kind === 'field' && sel.length === 1);
+  $('field-info').classList.toggle('renamable', !!renamable);
 }
 
-/** Clic sur la pastille du bas : renommer la parcelle sélectionnée. */
+/** Clic sur la pastille du bas : renommer l'objet sélectionné. */
 $('field-info').addEventListener('click', () => {
-  const sel = selected();
-  if (selKind() !== 'field' || sel.length !== 1) return;
+  const sel = selected(), kind = selKind();
+  if (!RENAMABLE[kind] || sel.length !== 1) return;
   const layer = sel[0];
-  const name = prompt('Nom de la parcelle :', nameOf(layer));
+  const name = prompt(RENAMABLE[kind].question, nameOf(layer));
   if (name == null) return; // annulé
   const clean = name.trim();
   if (clean) layer.feature.properties.name = clean; else delete layer.feature.properties.name;
@@ -595,7 +620,7 @@ function regenerate() {
   const p = params();
   const ring = ringOf(field);
   const res = generateStrips(ring, {
-    bearing: p.angle, mode: p.mode, reverse: p.reverse,
+    bearing: p.angle, mode: p.mode, reverse: p.reverse, holes: obstacles().map(ringOf),
     value: p.mode === 'area' ? p.value * 100 : p.value,
   });
   state.strips = res.strips;

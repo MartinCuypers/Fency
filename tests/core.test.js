@@ -41,6 +41,33 @@ test('champ non rectangulaire (triangle) : surfaces égales', () => {
   for (const s of g.strips) assert.ok(Math.abs(s.area - 2500) < 40, `aire ${s.area}`);
 });
 
+test('obstacle : clôture coupée autour, surface des bandes hors obstacle', () => {
+  const obstacle = [[80, 30], [120, 30], [120, 50], [80, 50], [80, 30]].map(p.toLL); // 40 m x 20 m = 800 m²
+  const g = generateStrips(rect, { bearing: 90, mode: 'width', value: 20, holes: [obstacle] });
+  assert.equal(g.lines.length, 5); // la clôture à 40 m est coupée en deux par l'obstacle
+  const split = g.lines.filter((l) => Math.abs(l.length - 80) < 0.5);
+  assert.equal(split.length, 2);
+  assert.ok(Math.abs(g.strips[1].area - 3600) < 40, `bande 2 : ${g.strips[1].area}`); // 20-40 m : 400 m² d'obstacle
+  assert.ok(Math.abs(g.strips[2].area - 3600) < 40, `bande 3 : ${g.strips[2].area}`); // 40-60 m : 400 m² d'obstacle
+  assert.ok(Math.abs(g.totalArea - 19200) < 40);
+});
+
+test('obstacle en mode surface : bandes de surface utile égale', () => {
+  const obstacle = [[80, 30], [120, 30], [120, 50], [80, 50], [80, 30]].map(p.toLL);
+  const g = generateStrips(rect, { bearing: 90, mode: 'area', value: 4800, holes: [obstacle] });
+  assert.equal(g.strips.length, 4);
+  for (const s of g.strips) assert.ok(Math.abs(s.area - 4800) < 60, `aire ${s.area}`);
+});
+
+test('obstacles qui se chevauchent ou dépassent du champ', () => {
+  const a = [[50, 10], [90, 10], [90, 30], [50, 30], [50, 10]].map(p.toLL);
+  const b = [[70, 15], [110, 15], [110, 25], [70, 25], [70, 15]].map(p.toLL); // chevauche a
+  const out = [[150, -20], [250, -20], [250, 30], [150, 30], [150, -20]].map(p.toLL); // dépasse du champ
+  const g = generateStrips(rect, { bearing: 90, mode: 'width', value: 20, holes: [a, b, out] });
+  const at20 = g.lines.filter((l) => l.strip === 1).map((l) => Math.round(l.length)).sort((x, y) => x - y);
+  assert.deepEqual(at20, [40, 50]); // 0-50 et 110-150 (a et b réunis : 50-110)
+});
+
 test('sens inverse : la première bande part de l\'autre côté', () => {
   const a = generateStrips(rect, { bearing: 90, value: 30 });
   const b = generateStrips(rect, { bearing: 90, value: 30, reverse: true });

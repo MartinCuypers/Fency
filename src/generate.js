@@ -16,7 +16,23 @@ function chords(poly, c) {
   return out;
 }
 
-const chordLength = (poly, c) => chords(poly, c).reduce((s, [a, b]) => s + (b - a), 0);
+/** Retire des intervalles [a, b] les parties couvertes par d'autres intervalles (qui peuvent se chevaucher). */
+function subtract(spans, holes) {
+  if (!holes.length) return spans;
+  holes.sort((x, y) => x[0] - y[0]);
+  const out = [];
+  for (const span of spans) {
+    let [a, b] = span;
+    for (const [h1, h2] of holes) {
+      if (h2 <= a || h1 >= b) continue;
+      if (h1 > a) out.push([a, h1]);
+      a = Math.max(a, h2);
+      if (a >= b) break;
+    }
+    if (a < b) out.push([a, b]);
+  }
+  return out;
+}
 
 /**
  * Découpe un champ en bandes parallèles.
@@ -25,14 +41,14 @@ const chordLength = (poly, c) => chords(poly, c).reduce((s, [a, b]) => s + (b - 
  * @param opts.mode     'width' (largeur de bande en m) ou 'area' (surface cible par bande en m²)
  * @param opts.value    largeur (m) ou surface (m²)
  * @param opts.reverse  balaye le champ en sens inverse (choix du côté de départ)
- * @returns {lines:[{coords,length,strip}], strips:[{index,area}], totalArea}
+ * @param opts.holes    obstacles : anneaux [[lon,lat],...] exclus des bandes (surfaces et clôtures)
+ * @returns {lines:[{coords,length,strip}], strips:[{index,area}], totalArea} (surfaces hors obstacles)
  */
-export function generateStrips(ring, { bearing = 0, mode = 'width', value = 20, reverse = false } = {}) {
+export function generateStrips(ring, { bearing = 0, mode = 'width', value = 20, reverse = false, holes = [] } = {}) {
   const r = openRing(ring);
   if (r.length < 3 || !(value > 0)) return { lines: [], strips: [], totalArea: 0 };
   const proj = makeProjection(centroidLL(r));
   const xy = r.map(proj.toXY);
-  const totalArea = polygonAreaXY(xy);
 
   // Repère (u,v) : les clôtures sont les droites v = const, de direction u.
   const phi = (90 - bearing + (reverse ? 180 : 0)) * RAD;
@@ -40,13 +56,17 @@ export function generateStrips(ring, { bearing = 0, mode = 'width', value = 20, 
   const toUV = ([x, y]) => [x * cos + y * sin, -x * sin + y * cos];
   const fromUV = ([u, v]) => [u * cos - v * sin, u * sin + v * cos];
   const poly = xy.map(toUV);
+  const holesUV = holes.map(openRing).filter((h) => h.length >= 3).map((h) => h.map((ll) => toUV(proj.toXY(ll))));
+  // parties utiles de la droite v = c : dans le champ, hors des obstacles
+  const usable = (c) => subtract(chords(poly, c), holesUV.flatMap((h) => chords(h, c)));
+  const chordLength = (c) => usable(c).reduce((s, [a, b]) => s + (b - a), 0);
   const vmin = Math.min(...poly.map((p) => p[1]));
   const vmax = Math.max(...poly.map((p) => p[1]));
 
   // Surface cumulée A(v) par intégration numérique (règle du point milieu).
   const N = 4000, dv = (vmax - vmin) / N;
   const cum = new Float64Array(N + 1);
-  for (let i = 0; i < N; i++) cum[i + 1] = cum[i] + chordLength(poly, vmin + (i + 0.5) * dv) * dv;
+  for (let i = 0; i < N; i++) cum[i + 1] = cum[i] + chordLength(vmin + (i + 0.5) * dv) * dv;
   const vAtArea = (a) => {
     let lo = 0, hi = N;
     while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (cum[mid] < a) lo = mid; else hi = mid; }
@@ -68,10 +88,11 @@ export function generateStrips(ring, { bearing = 0, mode = 'width', value = 20, 
 
   const lines = [];
   cuts.forEach((c, i) => {
-    for (const [u1, u2] of chords(poly, c)) {
+    for (const [u1, u2] of usable(c)) {
+      if (u2 - u1 < 0.5) continue; // morceau négligeable entre deux obstacles
       const coords = [fromUV([u1, c]), fromUV([u2, c])].map(proj.toLL);
       lines.push({ coords, length: u2 - u1, strip: i + 1 });
     }
   });
-  return { lines, strips, totalArea };
+  return { lines, strips, totalArea: holesUV.length ? cum[N] : polygonAreaXY(xy) };
 }
