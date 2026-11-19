@@ -102,6 +102,9 @@ const kindOf = (l) => l.feature?.properties?.kind ?? (isPolygon(l) ? 'field' : '
 const isField = (l) => kindOf(l) === 'field';
 const isObstacle = (l) => kindOf(l) === 'obstacle';
 const nameOf = (l) => l.feature?.properties?.name ?? '';
+const colorOf = (l) => l.feature?.properties?.color ?? '';
+// couleurs proposées pour les clôtures temporaires (pinceau de la pastille)
+const FENCE_COLORS = ['#ff1744', '#ff9100', '#ffea00', '#76ff03', '#00c853', '#2979ff', '#f50057', '#ffffff', '#8d6e63'];
 const fields = () => drawn.getLayers().filter(isField);
 const obstacles = () => drawn.getLayers().filter(isObstacle);
 const userLines = () => drawn.getLayers().filter((l) => kindOf(l) === 'line'); // clôtures temporaires (guidage)
@@ -123,7 +126,11 @@ const STYLE = {
 };
 
 function styleDrawn() {
-  drawn.eachLayer((l) => { const k = kindOf(l); l.setStyle(STYLE[state.sel.has(l) ? `${k}Sel` : k]); });
+  drawn.eachLayer((l) => {
+    const k = kindOf(l), sel = state.sel.has(l), own = k === 'line' && colorOf(l);
+    // clôture temporaire colorée : sa couleur, et un trait plus épais quand elle est sélectionnée
+    l.setStyle(own ? { color: own, weight: sel ? 8 : 4 } : STYLE[sel ? `${k}Sel` : k]);
+  });
   generated.eachLayer((l) => l.setStyle({ weight: state.selMarks ? 6 : l.options.baseWeight }));
   updateToolbar();
 }
@@ -143,12 +150,26 @@ const syncLayer = (layer) => { if (!applying) session?.putFeature(featureOf(laye
 function register(layer, id = uid(), props = {}) {
   const shape = isPolygon(layer) ? 'polygon' : 'line';
   const kind = KINDS.includes(props.kind) && LINE_KINDS.includes(props.kind) === (shape === 'line') ? props.kind : (shape === 'polygon' ? 'field' : 'line');
-  layer.feature = { type: 'Feature', properties: { id, kind, ...(props.name ? { name: String(props.name) } : {}) }, geometry: null };
+  const color = kind === 'line' && /^#[0-9a-f]{6}$/i.test(props.color ?? '') ? props.color : null;
+  layer.feature = { type: 'Feature', properties: { id, kind, ...(props.name ? { name: String(props.name) } : {}), ...(color ? { color } : {}) }, geometry: null };
   byId.set(id, layer);
   if (!drawn.hasLayer(layer)) drawn.addLayer(layer);
   // en Conception, la sélection passe par un clic sur la carte (voir pickAt)
   layer.on('click', () => { if (state.mode === 'field' && kindOf(layer) === 'line') pickLine(`u:${L.stamp(layer)}`); });
-  ['pm:edit', 'pm:dragend', 'pm:vertexadded', 'pm:vertexremoved'].forEach((ev) => layer.on(ev, () => { syncLayer(layer); refresh(); }));
+  // dernière forme acceptée (clôture temporaire : 280 m au plus) ; copie, car Geoman modifie les points en place
+  const copy = (ll) => (Array.isArray(ll) ? ll.map(copy) : L.latLng(ll.lat, ll.lng));
+  layer._good = copy(layer.getLatLngs());
+  ['pm:edit', 'pm:dragend', 'pm:vertexadded', 'pm:vertexremoved'].forEach((ev) => layer.on(ev, () => {
+    if (kindOf(layer) === 'line' && lengthLL(ringOf(layer)) > MAX_TEMP + 0.01) {
+      // modification refusée : on revient à la forme précédente
+      layer.setLatLngs(layer._good);
+      if (layer.pm.enabled()) { layer.pm.disable(); layer.pm.enable({ snappable: true }); }
+      toast(`Une clôture temporaire mesure ${MAX_TEMP} m au plus.`);
+      return;
+    }
+    layer._good = copy(layer.getLatLngs());
+    syncLayer(layer); refresh();
+  }));
   applyTool(layer, tool);
   styleDrawn();
 }
@@ -299,6 +320,45 @@ function deleteSelection() {
   toast(layers.length > 1 ? `${layers.length} objets supprimés.` : 'Objet supprimé.');
 }
 
+// ---------------------------------------------------------------- clôture temporaire : 280 m au plus
+// Pendant le tracé, la pastille du bas indique la longueur et ce qui reste ; un point qui ferait
+// dépasser 280 m est ramené à 280 m exactement sur son segment, et le tracé se termine.
+const MAX_TEMP = L_FENCE;
+let tempDraw = null; // calque de travail Geoman pendant le tracé d'une clôture temporaire
+
+function showTempLength(extra) {
+  if (!tempDraw) return;
+  const pts = tempDraw.getLatLngs().map((p) => [p.lng, p.lat]);
+  if (extra) pts.push([extra.lng, extra.lat]);
+  const len = pts.length > 1 ? lengthLL(pts) : 0, over = len > MAX_TEMP + 0.01;
+  $('field-info').classList.remove('renamable');
+  $('field-info').innerHTML = over
+    ? `Clôture temporaire : <b class="warn-text">${fmtM(len)} m</b> · arrêt à ${MAX_TEMP} m`
+    : `Clôture temporaire : <b>${fmtM(len)} m</b> · reste <b>${fmtM(Math.max(0, MAX_TEMP - len))} m</b>`;
+}
+map.on('pm:drawstart', (e) => {
+  if (tool !== 'line' || e.shape !== 'Line') return;
+  tempDraw = e.workingLayer;
+  showTempLength();
+  tempDraw.on('pm:vertexadded', () => {
+    const pts = tempDraw.getLatLngs(), ll = pts.map((p) => [p.lng, p.lat]), len = lengthLL(ll);
+    if (len < MAX_TEMP - 0.05) return showTempLength();
+    if (len > MAX_TEMP + 0.01) {
+      // dernier point ramené sur son segment, à 280 m du départ
+      const a = ll.at(-2), b = ll.at(-1), seg = lengthLL([a, b]), k = (MAX_TEMP - (len - seg)) / seg;
+      const p = L.latLng(a[1] + (b[1] - a[1]) * k, a[0] + (b[0] - a[0]) * k);
+      tempDraw.setLatLngs([...pts.slice(0, -1), p]);
+    }
+    // Geoman finit d'enregistrer le point avant qu'on termine le tracé
+    setTimeout(() => { if (map.pm.Draw.Line.enabled()) map.pm.Draw.Line._finishShape(); }, 0);
+    toast(`Clôture de ${MAX_TEMP} m : tracé terminé.`);
+  });
+});
+map.on('pm:drawend', () => { tempDraw = null; });
+map.on('mousemove', () => {
+  if (tempDraw && tempDraw.getLatLngs().length) showTempLength(map.pm.Draw.Line._hintMarker?.getLatLng());
+});
+
 // ---------------------------------------------------------------- barre d'outils (Conception)
 // Un seul outil actif à la fois. Modifier / Déplacer / Supprimer agissent sur la sélection :
 // on active Geoman objet par objet plutôt qu'en mode global.
@@ -309,7 +369,7 @@ const SNAP_TO_MARKS = new Set(['line', 'edit:line', 'permanent', 'edit:permanent
 const TOOL_HINTS = {
   polygon: 'Cliquez les sommets de la parcelle, puis le premier point pour la fermer.',
   obstacle: 'Cliquez les sommets de l\'obstacle, puis le premier point pour le fermer.',
-  line: 'Clôture temporaire : cliquez ses points, puis à nouveau le dernier point pour terminer.',
+  line: `Clôture temporaire (${L_FENCE} m au plus) : cliquez ses points, puis à nouveau le dernier pour terminer.`,
   permanent: 'Clôture permanente : cliquez ses points, puis à nouveau le dernier point pour terminer.',
   'edit:permanent': 'Déplacez les points de la clôture.',
   'drag:permanent': 'Faites glisser la clôture pour la déplacer.',
@@ -390,7 +450,7 @@ toolbar = createToolbar(map, [
   ] },
   { id: 'fences', title: 'Clôtures', color: '#00acc1', buttons: [
     { id: 'permanent', title: 'Dessiner une clôture naturelle ou permanente', text: '━', color: STYLE.permanent.color, onClick: () => setTool('permanent') },
-    { id: 'line', title: 'Dessiner une clôture temporaire', text: '┅', color: '#00a5bd', onClick: () => setTool('line') },
+    { id: 'line', title: 'Dessiner une clôture temporaire (280 m au plus)', text: '┅', color: '#00a5bd', onClick: () => setTool('line') },
     { id: 'switch-fence', title: 'Changer de type (permanente ↔ temporaire)', text: '⇄', onClick: switchFenceKind },
     { id: 'edit:line', title: 'Modifier la clôture', icon: 'edit', onClick: () => setTool('edit:line') },
     { id: 'drag:line', title: 'Déplacer la clôture', icon: 'drag', onClick: () => setTool('drag:line') },
@@ -412,11 +472,34 @@ const RENAMABLE = {
   permanent: { unnamed: 'Clôture permanente sans nom', question: 'Nom de la clôture :' },
 };
 
+/** Fenêtre des couleurs d'une clôture temporaire. */
+function openColors(layer) {
+  const box = $('color-list'), cur = colorOf(layer);
+  box.innerHTML = '';
+  const pick = (color) => {
+    if (color) layer.feature.properties.color = color; else delete layer.feature.properties.color;
+    syncLayer(layer); $('dlg-color').close(); refresh();
+  };
+  for (const c of [null, ...FENCE_COLORS]) {
+    const b = document.createElement('button');
+    b.className = 'swatch' + ((c ?? '') === cur ? ' current' : '');
+    b.style.setProperty('--c', c ?? STYLE.line.color);
+    b.title = c ? c : 'Couleur par défaut';
+    if (!c) b.textContent = 'défaut';
+    b.addEventListener('click', () => pick(c));
+    box.appendChild(b);
+  }
+  openDialog('dlg-color');
+}
+
 /** Bascule les clôtures sélectionnées entre temporaire (guidée) et permanente (seulement affichée). */
 function switchFenceKind() {
   const sel = selected().filter((l) => LINE_KINDS.includes(kindOf(l)));
   if (!sel.length) return;
   const to = kindOf(sel[0]) === 'line' ? 'permanent' : 'line';
+  if (to === 'line' && sel.some((l) => lengthLL(ringOf(l)) > MAX_TEMP + 0.01)) {
+    return toast(`Impossible : une clôture temporaire mesure ${MAX_TEMP} m au plus.`);
+  }
   setTool(null);
   for (const l of sel) { l.feature.properties.kind = to; syncLayer(l); }
   refresh();
@@ -451,8 +534,11 @@ function updateToolbar() {
   const isFence = LINE_KINDS.includes(kind);
   if (renamable) {
     const r = ringOf(sel[0]), name = nameOf(sel[0]);
-    const size = isFence ? `<b>${formatLength(lengthLL(r))}</b>` : `<b>${formatArea(areaLL(r))}</b> · périmètre ${formatLength(lengthLL([...r, r[0]]))}`;
-    info = `<span class="info-name${name ? '' : ' empty'}">${escapeHtml(name || RENAMABLE[kind].unnamed)} ✎</span> · ${size}`;
+    const len = lengthLL(r);
+    const rest = kind !== 'line' ? '' : len > MAX_TEMP + 0.01 ? ` · <span class="warn-text">plus de ${MAX_TEMP} m</span>` : ` · reste ${fmtM(Math.max(0, MAX_TEMP - len))} m`;
+    const size = isFence ? `<b>${formatLength(len)}</b>${rest}` : `<b>${formatArea(areaLL(r))}</b> · périmètre ${formatLength(lengthLL([...r, r[0]]))}`;
+    const brush = kind === 'line' ? `<span class="info-brush" title="Couleur de la clôture" style="--c:${colorOf(sel[0]) || STYLE.line.color}">🖌</span> ` : '';
+    info = `${brush}<span class="info-name${name ? '' : ' empty'}">${escapeHtml(name || RENAMABLE[kind].unnamed)} ✎</span> · ${size}`;
   } else if (kind === 'field' || kind === 'obstacle') {
     info = `${sel.length} ${kind === 'field' ? 'parcelles' : 'obstacles'} : <b>${formatArea(sel.reduce((t, l) => t + areaLL(ringOf(l)), 0))}</b>`;
   }
@@ -465,10 +551,11 @@ function updateToolbar() {
   $('field-info').classList.toggle('renamable', !!renamable);
 }
 
-/** Clic sur la pastille du bas : renommer l'objet sélectionné. */
-$('field-info').addEventListener('click', () => {
+/** Clic sur la pastille du bas : pinceau = couleur de la clôture, ailleurs = renommer l'objet. */
+$('field-info').addEventListener('click', (e) => {
   const sel = selected(), kind = selKind();
   if (!RENAMABLE[kind] || sel.length !== 1) return;
+  if (e.target.closest('.info-brush')) return openColors(sel[0]);
   const layer = sel[0];
   const name = prompt(RENAMABLE[kind].question, nameOf(layer));
   if (name == null) return; // annulé
