@@ -183,3 +183,16 @@ button.choice.current { background:#eef5ee; border-color:var(--green2); font-wei
   .fency-toolbar { gap:10px; }
   .side-head button, .side-body button { min-height:40px; }
 }
+
+/* Pastille pendant un tracé : dernier point, terminer, annuler */
+.map-info.drawing { pointer-events:auto; white-space:nowrap; display:flex; align-items:center; gap:8px; padding:4px 6px 4px 12px; }
+.draw-actions { display:flex; gap:4px; }
+.draw-actions button { min-width:36px; height:32px; padding:0 8px; font-size:17px; line-height:1; border-radius:16px; }
+.draw-actions button[data-act="finish"] { background:var(--green2); color:#fff; border-color:var(--green2); }
+.draw-actions button:disabled { opacity:.35; }
+@media (pointer: coarse) { .draw-actions button { min-width:44px; height:40px; } }
+@media (max-width: 819px) {
+  /* panneau des repères ouvert : la pastille de tracé reste visible, au-dessus du panneau */
+  body.marks-open .map-info.drawing { display:flex; bottom:calc(45dvh + 8px); }
+  body.marks-open #toast { bottom:calc(45dvh + 60px); }
+}

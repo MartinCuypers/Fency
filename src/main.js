@@ -103,6 +103,9 @@ const isPolygon = (l) => l instanceof L.Polygon;
 const isMarker = (l) => l instanceof L.Marker;
 const kindOf = (l) => l.feature?.properties?.kind ?? (isMarker(l) ? 'energizer' : isPolygon(l) ? 'field' : 'line');
 const energizers = () => drawn.getLayers().filter(isMarker);
+// déplacement d'un électrificateur : accroché aux clôtures ; sans la suppression de Geoman par clic droit
+// ou appui long (elle retirerait le point de la carte sans le retirer du plan)
+const MARKER_EDIT = { snappable: true, draggable: true, preventMarkerRemoval: true };
 const BOLT_SVG = '<svg viewBox="-9 -9 18 18" width="22" height="22" aria-hidden="true"><path d="M2-8-4 1H0L-2 8 4-1H0Z" fill="#212121"/></svg>';
 const energizerIcon = (sel) => L.divIcon({ className: `energizer-icon${sel ? ' sel' : ''}`, html: BOLT_SVG, iconSize: [30, 30], iconAnchor: [15, 15] });
 const isField = (l) => kindOf(l) === 'field';
@@ -142,7 +145,7 @@ function styleDrawn() {
       const sel = state.sel.has(l);
       if (l._sel !== sel) { // nouvelle icône : Geoman doit se rebrancher sur le nouvel élément
         l._sel = sel; l.setIcon(energizerIcon(sel));
-        if (l.pm?.enabled()) { l.pm.disable(); l.pm.enable({ snappable: true, draggable: true }); }
+        if (l.pm?.enabled()) { l.pm.disable(); l.pm.enable(MARKER_EDIT); }
       }
       return;
     }
@@ -189,7 +192,8 @@ function register(layer, id = uid(), props = {}) {
   // en Conception, la sélection passe par un clic sur la carte (voir hitTest)
   layer.on('click', (e) => {
     if (state.mode !== 'field') return;
-    if (kindOf(layer) === 'line') pickLine(`u:${L.stamp(layer)}`);
+    // le clic choisit la clôture ; il ne doit pas aussi déplacer la position simulée
+    if (kindOf(layer) === 'line') { L.DomEvent.stopPropagation(e); pickLine(`u:${L.stamp(layer)}`); }
     // en Terrain, l'électrificateur ouvre sa fenêtre (et le clic ne déplace pas la position simulée)
     if (kindOf(layer) === 'energizer') { L.DomEvent.stopPropagation(e); openEnergizer(layer); }
   });
@@ -319,9 +323,10 @@ function select(layers = [], { marks = false } = {}) {
   state.sel = new Set(layers);
   state.selMarks = marks;
   const f = layers.find(isField);
+  const fieldChanged = f && f !== state.selected;
   if (f) state.selected = f;
   if (tool && !TOOL_KEEPS_SELECTION.has(tool)) setTool(null);
-  refresh(false);
+  refresh(fieldChanged); // nouvelle parcelle : on enregistre qu'elle porte les repères (params.field)
 }
 
 map.on('click', (e) => {
@@ -357,44 +362,65 @@ function deleteSelection() {
   toast(layers.length > 1 ? `${layers.length} objets supprimés.` : 'Objet supprimé.');
 }
 
-// ---------------------------------------------------------------- clôture temporaire : 280 m au plus
-// Pendant le tracé, la pastille du bas indique la longueur et ce qui reste ; un point qui ferait
-// dépasser 280 m est ramené à 280 m exactement sur son segment, et le tracé se termine.
+// ---------------------------------------------------------------- tracé en cours (pastille du bas)
+// Pendant un tracé, la pastille du bas indique où l'on en est et offre « dernier point », « terminer »
+// et « annuler » (utile au doigt, sans clavier ni clic droit). Clôture temporaire : 280 m au plus ;
+// un point qui ferait dépasser 280 m est ramené à 280 m exactement sur son segment, et le tracé se termine.
+// Ces actions passent par des fonctions internes de Geoman (version figée dans package.json).
 const MAX_TEMP = L_FENCE;
-let tempDraw = null; // calque de travail Geoman pendant le tracé d'une clôture temporaire
+let drawWork = null; // calque de travail Geoman pendant un tracé (parcelle, obstacle, clôture, découpe)
+const drawShape = () => map.pm.Draw.getActiveShape?.();
+const drawer = () => map.pm.Draw[drawShape()];
 
-function showTempLength(extra) {
-  if (!tempDraw) return;
-  const pts = tempDraw.getLatLngs().map((p) => [p.lng, p.lat]);
+function renderDrawInfo(extra) {
+  if (!drawWork) return;
+  const pts = drawWork.getLatLngs().flat(Infinity).map((p) => [p.lng, p.lat]);
+  const n = pts.length;
   if (extra) pts.push([extra.lng, extra.lat]);
-  const len = pts.length > 1 ? lengthLL(pts) : 0, over = len > MAX_TEMP + 0.01;
+  let text;
+  if (tool === 'line') {
+    const len = pts.length > 1 ? lengthLL(pts) : 0;
+    text = len > MAX_TEMP + 0.01
+      ? `<b class="warn-text">${fmtM(len)} m</b> · arrêt à ${MAX_TEMP} m`
+      : `<b>${fmtM(len)} m</b> · reste <b>${fmtM(Math.max(0, MAX_TEMP - len))} m</b>`;
+  } else text = `${n} point${n > 1 ? 's' : ''}`;
+  const canFinish = drawShape() === 'Polygon' ? n >= 3 : n >= 2;
   $('field-info').classList.remove('renamable');
-  $('field-info').innerHTML = over
-    ? `Clôture temporaire : <b class="warn-text">${fmtM(len)} m</b> · arrêt à ${MAX_TEMP} m`
-    : `Clôture temporaire : <b>${fmtM(len)} m</b> · reste <b>${fmtM(Math.max(0, MAX_TEMP - len))} m</b>`;
+  $('field-info').classList.add('drawing');
+  $('field-info').innerHTML = `${text}
+    <span class="draw-actions"><button data-act="undo" ${n ? '' : 'disabled'} title="Retirer le dernier point">↶</button><button data-act="finish" ${canFinish ? '' : 'disabled'} title="Terminer le tracé">✓</button><button data-act="cancel" title="Annuler le tracé">✕</button></span>`;
 }
 map.on('pm:drawstart', (e) => {
-  if (tool !== 'line' || e.shape !== 'Line') return;
-  tempDraw = e.workingLayer;
-  showTempLength();
-  tempDraw.on('pm:vertexadded', () => {
-    const pts = tempDraw.getLatLngs(), ll = pts.map((p) => [p.lng, p.lat]), len = lengthLL(ll);
-    if (len < MAX_TEMP - 0.05) return showTempLength();
+  if (!['Line', 'Polygon'].includes(e.shape)) return;
+  drawWork = e.workingLayer;
+  renderDrawInfo();
+  drawWork.on('pm:vertexremoved', () => renderDrawInfo());
+  drawWork.on('pm:vertexadded', () => {
+    if (tool !== 'line') return renderDrawInfo();
+    const pts = drawWork.getLatLngs(), ll = pts.map((p) => [p.lng, p.lat]), len = lengthLL(ll);
+    if (len < MAX_TEMP - 0.05) return renderDrawInfo();
     if (len > MAX_TEMP + 0.01) {
       // dernier point ramené sur son segment, à 280 m du départ
       const a = ll.at(-2), b = ll.at(-1), seg = lengthLL([a, b]), k = (MAX_TEMP - (len - seg)) / seg;
       const p = L.latLng(a[1] + (b[1] - a[1]) * k, a[0] + (b[0] - a[0]) * k);
-      tempDraw.setLatLngs([...pts.slice(0, -1), p]);
+      drawWork.setLatLngs([...pts.slice(0, -1), p]);
     }
     // Geoman finit d'enregistrer le point avant qu'on termine le tracé
     setTimeout(() => { if (map.pm.Draw.Line.enabled()) map.pm.Draw.Line._finishShape(); }, 0);
     toast(`Clôture de ${MAX_TEMP} m : tracé terminé.`);
   });
 });
-map.on('pm:drawend', () => { tempDraw = null; });
+map.on('pm:drawend', () => { drawWork = null; $('field-info').classList.remove('drawing'); });
 map.on('mousemove', () => {
-  if (tempDraw && tempDraw.getLatLngs().length) showTempLength(map.pm.Draw.Line._hintMarker?.getLatLng());
+  if (drawWork && drawWork.getLatLngs().flat(Infinity).length) renderDrawInfo(drawer()?._hintMarker?.getLatLng());
 });
+/** Actions de la pastille pendant un tracé. */
+function drawAction(act) {
+  const d = drawer();
+  if (act === 'cancel' || !d) return setTool(null);
+  if (act === 'undo' && typeof d._removeLastVertex === 'function') d._removeLastVertex();
+  if (act === 'finish' && typeof d._finishShape === 'function') d._finishShape();
+}
 
 // ---------------------------------------------------------------- barre d'outils (Conception)
 // Un seul outil actif à la fois. Modifier / Déplacer / Supprimer agissent sur la sélection :
@@ -428,7 +454,7 @@ function applyTool(layer, t) {
   if (!layer.pm) return;
   const kind = kindOf(layer), mine = state.sel.has(layer);
   if (isMarker(layer)) { // un point se déplace en le faisant glisser (Geoman : accrochage aux clôtures)
-    if (mine && t === 'drag:energizer') layer.pm.enable({ snappable: true, draggable: true }); else if (layer.pm.enabled()) layer.pm.disable();
+    if (mine && t === 'drag:energizer') layer.pm.enable(MARKER_EDIT); else if (layer.pm.enabled()) layer.pm.disable();
     return;
   }
   if (mine && t === `edit:${kind}`) layer.pm.enable({ snappable: true }); else if (layer.pm.enabled()) layer.pm.disable();
@@ -446,7 +472,8 @@ function setTool(next) {
   drawn.eachLayer((l) => applyTool(l, next));
   if (next === 'cut') cutting = selected().find(isField) ?? null;
   if (DRAW_TOOLS[next]) {
-    map.pm.enableDraw(DRAW_TOOLS[next], { snappable: true, ...(next === 'energizer' ? { markerStyle: { icon: energizerIcon(false) }, continueDrawing: false } : {}) });
+    // sur écran tactile, la bulle d'aide de Geoman (qui suit le doigt) se place mal : la pastille suffit
+    map.pm.enableDraw(DRAW_TOOLS[next], { snappable: true, tooltips: !matchMedia('(pointer: coarse)').matches, ...(next === 'energizer' ? { markerStyle: { icon: energizerIcon(false) }, continueDrawing: false } : {}) });
   }
   map.getContainer().classList.toggle('tool-reference', tool === 'reference');
   if (tool) toast(TOOL_HINTS[tool]);
@@ -624,10 +651,13 @@ function updateToolbar() {
   }
   $('field-info').innerHTML = info;
   $('field-info').classList.toggle('renamable', !!renamable);
+  if (drawWork) renderDrawInfo(); // un tracé est en cours : la pastille garde ses actions
 }
 
 /** Clic sur la pastille du bas : pinceau = couleur de la clôture, ailleurs = renommer l'objet. */
 $('field-info').addEventListener('click', (e) => {
+  const act = e.target.closest('[data-act]')?.dataset.act;
+  if (act) return drawAction(act);
   const sel = selected(), kind = selKind();
   if (!RENAMABLE[kind] || sel.length !== 1) return;
   if (e.target.closest('.info-brush')) return openColors(sel[0]);
@@ -1050,7 +1080,10 @@ $('file-import').addEventListener('change', async (e) => {
     state.genActive = !!meta?.genActive;
     refresh();
     if (drawn.getLayers().length) map.fitBounds(drawn.getBounds(), { padding: [30, 30] });
-    toast(`${n} élément(s) importé(s).`);
+    const long = userLines().filter((l) => lengthLL(ringOf(l)) > MAX_TEMP + 0.01).length;
+    toast(long
+      ? `${n} élément(s) importé(s). Attention : ${long} clôture${long > 1 ? 's' : ''} temporaire${long > 1 ? 's' : ''} de plus de ${MAX_TEMP} m (un kit).`
+      : `${n} élément(s) importé(s).`);
   } catch { toast('Fichier GeoJSON invalide.'); }
 });
 $('btn-reset').addEventListener('click', () => {
@@ -1060,9 +1093,13 @@ $('btn-reset').addEventListener('click', () => {
   drawn.clearLayers(); state.selected = null; state.genActive = false; refresh();
 });
 
-function applyParams(p) {
+/**
+ * `withField` : reprendre aussi la parcelle des repères (ouverture d'un plan, import). Pas pour les
+ * changements reçus d'un autre appareil : chacun garde la parcelle sur laquelle il travaille.
+ */
+function applyParams(p, { withField = true } = {}) {
   if (!p) return;
-  if (p.field) { state.genFieldId = p.field; state.selected = null; }
+  if (withField && p.field) { state.genFieldId = p.field; state.selected = null; }
   $('gen-mode').value = p.mode === 'area' ? 'area' : 'width';
   $('gen-value').value = p.value ?? 20; $('gen-angle').value = p.angle ?? 90;
   $('gen-reverse').checked = !!p.reverse; $('gen-perimeter').checked = p.perimeter !== false;
@@ -1094,7 +1131,7 @@ function fillLineSelect() {
   const prev = gps.target;
   gps.lines = allLines();
   sel.innerHTML = `<option value="auto">Ligne la plus proche (auto)</option>` +
-    gps.lines.map((l) => `<option value="${l.id}">${l.label} · ${formatLength(l.length)}</option>`).join('');
+    gps.lines.map((l) => `<option value="${l.id}">${escapeHtml(l.label)} · ${formatLength(l.length)}${l.length > MAX_TEMP + 0.01 ? ` ⚠ plus de ${MAX_TEMP} m` : ''}</option>`).join('');
   sel.value = gps.lines.some((l) => l.id === prev) || prev === 'auto' ? prev : 'auto';
   gps.target = sel.value;
 }
@@ -1389,7 +1426,7 @@ const sessionUi = {
   },
   applyMeta(meta) {
     applying = true;
-    try { applyParams(meta.params); state.genActive = !!meta.genActive; } finally { applying = false; }
+    try { applyParams(meta.params, { withField: false }); state.genActive = !!meta.genActive; } finally { applying = false; }
     refresh(false); showPlanName();
   },
   upsertFeature(feature) {
@@ -1560,7 +1597,7 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) sessi
 
 refresh(false);
 const ready = boot().catch((e) => { console.error(e); toast('Erreur au démarrage du stockage.'); });
-window.__fm = { hitTest, generated, setHeading: (deg) => { gps.heading = deg == null ? null : { deg, t: Infinity }; render(); }, map, drawn, refLayer, state, gps, register, refresh, onPos, setMode, L, ready, syncLayer, get session() { return session; }, get backend() { return backend; } }; // utile pour les tests
+window.__fm = { hitTest, generated, sessionUi, setHeading: (deg) => { gps.heading = deg == null ? null : { deg, t: Infinity }; render(); }, map, drawn, refLayer, state, gps, register, refresh, onPos, setMode, L, ready, syncLayer, get session() { return session; }, get backend() { return backend; } }; // utile pour les tests
 
 if (import.meta.env.PROD && !android && 'serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js').catch(() => {});
