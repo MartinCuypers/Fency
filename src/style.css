@@ -196,3 +196,15 @@ button.choice.current { background:#eef5ee; border-color:var(--green2); font-wei
   body.marks-open .map-info.drawing { display:flex; bottom:calc(45dvh + 8px); }
   body.marks-open #toast { bottom:calc(45dvh + 60px); }
 }
+
+/* Longueur des côtés pendant le tracé d'une parcelle ou d'un obstacle */
+.edge-len { pointer-events:none; }
+.edge-len span { position:absolute; transform:translate(-50%,-50%) rotate(var(--a)); white-space:nowrap; background:rgba(33,33,33,.82); color:#fff; font-size:12px; font-weight:600; padding:2px 7px; border-radius:5px; pointer-events:none; }
+
+/* Goutte de déplacement (écran tactile) : on la fait glisser, le point suit au-dessus du doigt */
+.leaflet-marker-icon.drop-handle { background:none; border:0; }
+.drop-handle .drop { position:absolute; left:0; bottom:0; filter:drop-shadow(0 1px 3px rgba(0,0,0,.45)); }
+.drop-handle .drop path { fill:rgba(229,57,53,.72); stroke:#fff; stroke-width:1.5; }
+.drop-handle .drop path.arrows { fill:none; stroke:#fff; stroke-width:3; stroke-linecap:round; stroke-linejoin:round; }
+.drop-handle .drop-target { position:absolute; left:20px; top:4px; width:12px; height:12px; border-radius:50%; border:2px solid #fff; box-shadow:0 0 0 2px #e53935; }
+.drop-handle .energizer-icon { position:absolute; left:11px; top:0; }

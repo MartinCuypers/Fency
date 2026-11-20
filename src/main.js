@@ -107,7 +107,22 @@ const energizers = () => drawn.getLayers().filter(isMarker);
 // ou appui long (elle retirerait le point de la carte sans le retirer du plan)
 const MARKER_EDIT = { snappable: true, draggable: true, preventMarkerRemoval: true };
 const BOLT_SVG = '<svg viewBox="-9 -9 18 18" width="22" height="22" aria-hidden="true"><path d="M2-8-4 1H0L-2 8 4-1H0Z" fill="#212121"/></svg>';
-const energizerIcon = (sel) => L.divIcon({ className: `energizer-icon${sel ? ' sel' : ''}`, html: BOLT_SVG, iconSize: [30, 30], iconAnchor: [15, 15] });
+const energizerIcon = (sel, drop = false) => (drop
+  ? L.divIcon({ className: 'drop-handle', html: `<div class="energizer-icon sel">${BOLT_SVG}</div>${DROP_SVG}`, iconSize: [52, 102], iconAnchor: [26, 15] })
+  : L.divIcon({ className: `energizer-icon${sel ? ' sel' : ''}`, html: BOLT_SVG, iconSize: [30, 30], iconAnchor: [15, 15] }));
+// ---------------------------------------------------------------- goutte (écran tactile)
+// Sur téléphone, le point qu'on déplace (sommet touché, électrificateur) porte une goutte sous lui :
+// on fait glisser la goutte, le point suit au-dessus, sans être caché par le doigt.
+const COARSE = matchMedia('(pointer: coarse)').matches;
+const DROP_SVG = '<svg class="drop" viewBox="0 0 52 66" width="52" height="66" aria-hidden="true"><path d="M26 2C33 14 50 24 50 41A24 24 0 1 1 2 41C2 24 19 14 26 2Z"/><path class="arrows" d="M26 27v28M12 41h28M22 31l4-4 4 4M22 51l4 4 4-4M16 37l-4 4 4 4M36 37l4 4-4 4"/></svg>';
+const dropVertexIcon = L.divIcon({ className: 'drop-handle', html: `<span class="drop-target"></span>${DROP_SVG}`, iconSize: [52, 86], iconAnchor: [26, 10] });
+let dropVertex = null; // sommet en cours d'édition qui porte la goutte
+function setDropVertex(m) {
+  if (dropVertex === m) return;
+  if (dropVertex?._map) dropVertex.setIcon(dropVertex._pmIcon); // icône d'origine de Geoman
+  dropVertex = m;
+  if (m) { m._pmIcon = m.options.icon; m.setIcon(dropVertexIcon); }
+}
 const isField = (l) => kindOf(l) === 'field';
 const isObstacle = (l) => kindOf(l) === 'obstacle';
 const nameOf = (l) => l.feature?.properties?.name ?? '';
@@ -143,9 +158,9 @@ const STYLE = {
 function styleDrawn() {
   drawn.eachLayer((l) => {
     if (isMarker(l)) { // électrificateur : on ne change l'icône que si la sélection a changé
-      const sel = state.sel.has(l);
-      if (l._sel !== sel) { // nouvelle icône : Geoman doit se rebrancher sur le nouvel élément
-        l._sel = sel; l.setIcon(energizerIcon(sel));
+      const sel = state.sel.has(l), drop = COARSE && sel && tool === 'drag:energizer';
+      if (l._sel !== sel || l._drop !== drop) { // nouvelle icône : Geoman doit se rebrancher sur le nouvel élément
+        l._sel = sel; l._drop = drop; l.setIcon(energizerIcon(sel, drop));
         if (l.pm?.enabled()) { l.pm.disable(); l.pm.enable(MARKER_EDIT); }
       }
       return;
@@ -202,6 +217,8 @@ function register(layer, id = uid(), props = {}) {
   // dernière forme acceptée (clôture temporaire : 280 m au plus) ; copie, car Geoman modifie les points en place
   const copy = (ll) => (Array.isArray(ll) ? ll.map(copy) : L.latLng(ll.lat, ll.lng));
   layer._good = isMarker(layer) ? null : copy(layer.getLatLngs());
+  // téléphone : le sommet touché reçoit la goutte
+  if (COARSE && !isMarker(layer)) layer.on('pm:vertexclick', (e) => setDropVertex(e.markerEvent.target));
   ['pm:edit', 'pm:dragend', 'pm:vertexadded', 'pm:vertexremoved', 'dragend'].forEach((ev) => layer.on(ev, () => {
     if (kindOf(layer) === 'line' && lengthLL(ringOf(layer)) > MAX_TEMP + 0.01) {
       // modification refusée : on revient à la forme précédente
@@ -218,6 +235,7 @@ function register(layer, id = uid(), props = {}) {
 }
 
 map.on('pm:create', (e) => {
+  drawWork = null; // tracé terminé : setTool (appelé par select) n'a plus rien à valider
   if (cutting) { // la ligne tracée est un trait de coupe, pas une clôture
     const target = cutting, line = ringOf(e.layer);
     cutting = null; e.layer.remove();
@@ -374,17 +392,51 @@ let drawWork = null; // calque de travail Geoman pendant un tracé (parcelle, ob
 const drawShape = () => map.pm.Draw.getActiveShape?.();
 const drawer = () => map.pm.Draw[drawShape()];
 
+// Parcelle ou obstacle en cours de tracé : le polygone est affiché fermé dès le troisième point, avec la
+// longueur de chaque côté ; il est enregistré tel quel dès qu'on quitte l'outil (✓, autre outil…).
+const drawPreview = L.polygon([], { interactive: false, pmIgnore: true, snapIgnore: true, weight: 3, fillOpacity: 0.25 });
+const edgeLabels = L.layerGroup().addTo(map);
+
+/** Étiquettes de longueur au milieu des côtés (`closed` : avec le côté qui ferme le polygone). */
+function renderEdgeLabels(pts, closed) {
+  edgeLabels.clearLayers();
+  const n = pts.length;
+  if (n < 2) return;
+  for (let i = 0; i < (closed && n >= 3 ? n : n - 1); i++) {
+    const a = pts[i], b = pts[(i + 1) % n];
+    const pa = map.latLngToLayerPoint(a), pb = map.latLngToLayerPoint(b);
+    if (pa.distanceTo(pb) < 44) continue; // côté trop court à l'écran pour son étiquette
+    let ang = Math.atan2(pb.y - pa.y, pb.x - pa.x) * 180 / Math.PI;
+    if (ang > 90) ang -= 180; else if (ang < -90) ang += 180; // texte jamais à l'envers
+    const len = lengthLL([[a.lng, a.lat], [b.lng, b.lat]]);
+    L.marker(map.layerPointToLatLng(pa.add(pb).divideBy(2)), {
+      interactive: false, keyboard: false, pmIgnore: true, snapIgnore: true,
+      icon: L.divIcon({ className: 'edge-len', html: `<span style="--a:${ang.toFixed(1)}deg">${formatLength(len)}</span>`, iconSize: [0, 0] }),
+    }).addTo(edgeLabels);
+  }
+}
+
 function renderDrawInfo(extra) {
   if (!drawWork) return;
-  const pts = drawWork.getLatLngs().flat(Infinity).map((p) => [p.lng, p.lat]);
+  const vertices = drawWork.getLatLngs().flat(Infinity);
+  const pts = vertices.map((p) => [p.lng, p.lat]);
   const n = pts.length;
   if (extra) pts.push([extra.lng, extra.lat]);
   let text;
+  if (drawShape() === 'Polygon') {
+    const ll = extra ? [...vertices, extra] : vertices;
+    drawPreview.setLatLngs(ll.length >= 3 ? ll : []).setStyle(STYLE[tool === 'obstacle' ? 'obstacle' : 'field']);
+    drawPreview.setStyle({ fillOpacity: 0.25 });
+    if (!map.hasLayer(drawPreview)) drawPreview.addTo(map);
+    renderEdgeLabels(ll, true);
+  }
   if (tool === 'line') {
     const len = pts.length > 1 ? lengthLL(pts) : 0;
     text = len > MAX_TEMP + 0.01
       ? `<b class="warn-text">${fmtM(len)} m</b> · arrêt à ${MAX_TEMP} m`
       : `<b>${fmtM(len)} m</b> · reste <b>${fmtM(Math.max(0, MAX_TEMP - len))} m</b>`;
+  } else if (drawShape() === 'Polygon' && pts.length >= 3) {
+    text = `<b>${formatArea(areaLL(pts))}</b> · ${formatLength(lengthLL([...pts, pts[0]]))}`;
   } else text = `${n} point${n > 1 ? 's' : ''}`;
   const canFinish = drawShape() === 'Polygon' ? n >= 3 : n >= 2;
   $('field-info').classList.remove('renamable');
@@ -412,14 +464,18 @@ map.on('pm:drawstart', (e) => {
     toast(`Clôture de ${MAX_TEMP} m : tracé terminé.`);
   });
 });
-map.on('pm:drawend', () => { drawWork = null; $('field-info').classList.remove('drawing'); });
+map.on('pm:drawend', () => {
+  drawWork = null; $('field-info').classList.remove('drawing');
+  drawPreview.remove(); edgeLabels.clearLayers();
+});
+map.on('zoomend', () => { if (drawWork) renderDrawInfo(drawer()?._hintMarker?.getLatLng()); });
 map.on('mousemove', () => {
   if (drawWork && drawWork.getLatLngs().flat(Infinity).length) renderDrawInfo(drawer()?._hintMarker?.getLatLng());
 });
 /** Actions de la pastille pendant un tracé. */
 function drawAction(act) {
   const d = drawer();
-  if (act === 'cancel' || !d) return setTool(null);
+  if (act === 'cancel' || !d) return setTool(null, { discard: true });
   if (act === 'undo' && typeof d._removeLastVertex === 'function') d._removeLastVertex();
   if (act === 'finish' && typeof d._finishShape === 'function') d._finishShape();
 }
@@ -432,8 +488,8 @@ const TOOL_KEEPS_SELECTION = new Set(['merge']);
 // outils pendant lesquels les repères virtuels attirent le curseur (accrochage Geoman)
 const SNAP_TO_MARKS = new Set(['line', 'edit:line', 'permanent', 'edit:permanent']);
 const TOOL_HINTS = {
-  polygon: 'Cliquez les sommets de la parcelle, puis le premier point pour la fermer.',
-  obstacle: 'Cliquez les sommets de l\'obstacle, puis le premier point pour le fermer.',
+  polygon: 'Placez les sommets de la parcelle : elle reste fermée. ✓ ou un autre outil pour l\'enregistrer.',
+  obstacle: 'Placez les sommets de l\'obstacle : il reste fermé. ✓ ou un autre outil pour l\'enregistrer.',
   line: `Clôture temporaire (${L_FENCE} m au plus) : cliquez ses points, puis à nouveau le dernier pour terminer.`,
   permanent: 'Clôture permanente : cliquez ses points, puis à nouveau le dernier point pour terminer.',
   'edit:permanent': 'Déplacez les points de la clôture.',
@@ -463,10 +519,18 @@ function applyTool(layer, t) {
   if (mine && t === `drag:${kind}`) layer.pm.enableLayerDrag(); else if (layer.pm.layerDragEnabled?.()) layer.pm.disableLayerDrag();
 }
 
-/** Active un outil ; le même outil une seconde fois, ou null, revient à la sélection. */
-function setTool(next) {
+/**
+ * Active un outil ; le même outil une seconde fois, ou null, revient à la sélection. Une parcelle ou un
+ * obstacle en cours de tracé (3 points au moins) est enregistré, sauf avec `discard` (annulation).
+ */
+function setTool(next, { discard = false } = {}) {
   const prev = tool;
   if (next === prev) next = null;
+  if (!discard && drawWork && drawShape() === 'Polygon' && drawWork.getLatLngs().flat(Infinity).length >= 3) {
+    // pm:create enregistre l'objet (tool vaut encore l'outil de tracé) ; son select() revient à la sélection
+    drawer()?._finishShape?.();
+  }
+  setDropVertex(null);
   tool = next;
   if (DRAW_TOOLS[prev]) { cutting = null; map.pm.disableDraw(); }
   generated.eachLayer((l) => { l.options.snapIgnore = !SNAP_TO_MARKS.has(next); }); // avant d'activer l'outil
@@ -478,12 +542,14 @@ function setTool(next) {
     map.pm.enableDraw(DRAW_TOOLS[next], { snappable: true, tooltips: !matchMedia('(pointer: coarse)').matches, ...(next === 'energizer' ? { markerStyle: { icon: energizerIcon(false) }, continueDrawing: false } : {}) });
   }
   map.getContainer().classList.toggle('tool-reference', tool === 'reference');
-  if (tool) toast(TOOL_HINTS[tool]);
+  if (tool) toast(COARSE && /^edit:|^drag:energizer$/.test(tool)
+    ? `${TOOL_HINTS[tool]} ${tool === 'drag:energizer' ? 'Faites glisser la goutte' : 'Touchez un sommet, puis faites glisser sa goutte'} : le point reste visible au-dessus du doigt.`
+    : TOOL_HINTS[tool]);
   styleDrawn();
 }
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape' || document.querySelector('dialog[open]')) return;
-  if (tool) setTool(null); else select([]);
+  if (tool) setTool(null, { discard: true }); else select([]);
 });
 // tracé terminé ou abandonné : on revient à la sélection
 map.on('pm:drawend', () => setTimeout(() => {
@@ -1123,7 +1189,7 @@ $('file-import').addEventListener('change', async (e) => {
 });
 $('btn-reset').addEventListener('click', () => {
   if (!confirm('Tout effacer (parcelles, clôtures et repères) ?')) return;
-  $('dlg-plan').close(); setTool(null);
+  $('dlg-plan').close(); setTool(null, { discard: true });
   state.sel.clear(); state.selMarks = false;
   drawn.clearLayers(); state.selected = null; state.genActive = false; refresh();
 });
@@ -1460,7 +1526,7 @@ const sessionUi = {
   applyPlan(meta, features) {
     applying = true;
     try {
-      state.sel.clear(); state.selMarks = false; setTool(null);
+      state.sel.clear(); state.selMarks = false; setTool(null, { discard: true });
       drawn.clearLayers(); byId.clear(); state.selected = null; state.marksField = undefined;
       state.lastParams = meta.params ?? null;
       loadFeatures({ type: 'FeatureCollection', features }, { keepIds: true });
