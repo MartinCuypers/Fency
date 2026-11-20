@@ -402,16 +402,27 @@ function renderEdgeLabels(pts, closed) {
   edgeLabels.clearLayers();
   const n = pts.length;
   if (n < 2) return;
-  for (let i = 0; i < (closed && n >= 3 ? n : n - 1); i++) {
-    const a = pts[i], b = pts[(i + 1) % n];
-    const pa = map.latLngToLayerPoint(a), pb = map.latLngToLayerPoint(b);
-    if (pa.distanceTo(pb) < 44) continue; // côté trop court à l'écran pour son étiquette
+  const P = pts.map((p) => map.latLngToLayerPoint(p));
+  // sens du contour à l'écran : l'étiquette se place à l'extérieur du polygone
+  let turn = 0;
+  for (let i = 0; i < n; i++) { const p = P[i], q = P[(i + 1) % n]; turn += p.x * q.y - q.x * p.y; }
+  const segs = closed && n >= 3 ? n : n - 1;
+  for (let i = 0; i < segs; i++) {
+    const a = pts[i], b = pts[(i + 1) % n], pa = P[i], pb = P[(i + 1) % n];
+    const d = pa.distanceTo(pb);
+    if (d < 44) continue; // côté trop court à l'écran pour son étiquette
     let ang = Math.atan2(pb.y - pa.y, pb.x - pa.x) * 180 / Math.PI;
     if (ang > 90) ang -= 180; else if (ang < -90) ang += 180; // texte jamais à l'envers
     const len = lengthLL([[a.lng, a.lat], [b.lng, b.lat]]);
-    L.marker(map.layerPointToLatLng(pa.add(pb).divideBy(2)), {
-      interactive: false, keyboard: false, pmIgnore: true, snapIgnore: true,
-      icon: L.divIcon({ className: 'edge-len', html: `<span style="--a:${ang.toFixed(1)}deg">${formatLength(len)}</span>`, iconSize: [0, 0] }),
+    const mid = pa.add(pb).divideBy(2);
+    // normale au côté, vers l'extérieur (ou vers le haut de l'écran pour un simple segment)
+    let nx = (pb.y - pa.y) / d, ny = -(pb.x - pa.x) / d;
+    if (segs === n ? turn < 0 : ny > 0) { nx = -nx; ny = -ny; }
+    const opts = { interactive: false, keyboard: false, pmIgnore: true, snapIgnore: true };
+    // point du milieu du côté, dégagé : l'étiquette est décalée au-dessus du trait
+    L.marker(map.layerPointToLatLng(mid), { ...opts, icon: L.divIcon({ className: 'edge-mid', iconSize: [10, 10] }) }).addTo(edgeLabels);
+    L.marker(map.layerPointToLatLng(mid.add(L.point(nx * 17, ny * 17))), {
+      ...opts, icon: L.divIcon({ className: 'edge-len', html: `<span style="--a:${ang.toFixed(1)}deg">${formatLength(len)}</span>`, iconSize: [0, 0] }),
     }).addTo(edgeLabels);
   }
 }

@@ -208,3 +208,4 @@ button.choice.current { background:#eef5ee; border-color:var(--green2); font-wei
 .drop-handle .drop path.arrows { fill:none; stroke:#fff; stroke-width:3; stroke-linecap:round; stroke-linejoin:round; }
 .drop-handle .drop-target { position:absolute; left:20px; top:4px; width:12px; height:12px; border-radius:50%; border:2px solid #fff; box-shadow:0 0 0 2px #e53935; }
 .drop-handle .energizer-icon { position:absolute; left:11px; top:0; }
+.leaflet-marker-icon.edge-mid { pointer-events:none; border-radius:50%; background:#fff; border:2px solid #212121; }
