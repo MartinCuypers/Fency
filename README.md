@@ -4,22 +4,28 @@ Application web / smartphone (PWA installable) pour **concevoir et poser des cl�
 
 ## Fonctions
 
-**Conception (sur ordinateur ou téléphone)**
+**Conception (sur ordinateur ou téléphone)** : tout se fait depuis la barre d'outils de la carte, en cinq blocs (Cartographie, Parcelles, Repères virtuels, Clôtures, Plan) ; les réglages s'ouvrent dans des fenêtres. Par défaut, un clic sélectionne l'objet visé (en priorité un point, puis une ligne, puis la plus petite surface ; Maj/Ctrl + clic pour en ajouter) et la barre n'affiche que les outils utilisables sur la sélection.
 - Fonds de carte : satellite IGN, Esri, plan OSM, Sentinel-2 (indice SAVI, via Sentinel Hub).
-- Parcelles : dessin (polygone/rectangle), ou création en cliquant un polygone d'une couche de référence WFS (RPG de l'IGN) ; fusion de parcelles voisines (les espaces de moins de 5 m sont comblés) et découpe par un trait.
-- Clôtures dessinées à la main (lignes), accrochage aux sommets.
-- Génération de clôtures de subdivision parallèles, par largeur de bande (m) ou par surface (ares), pour tout type de forme de champ ; direction réglable ou alignée sur le plus long côté ; choix du côté de départ ; clôture du périmètre en option.
-- Surface de chaque bande, longueur totale de clôture et de fil estimées.
-- Plusieurs plans nommés, enregistrés automatiquement ; export / import GeoJSON.
+- Parcelles : dessin (polygone, affiché fermé dès le troisième point avec la longueur de chaque côté, la surface et le périmètre ; enregistré dès qu'on valide ou qu'on change d'outil), ou création en cliquant un polygone d'une couche de référence WFS (RPG de l'IGN) ; fusion de parcelles voisines (les espaces de moins de 5 m sont comblés) et découpe par un trait ; nom de la parcelle (clic sur la pastille du bas), repris à la découpe et à la fusion.
+- Obstacles (mare, bâtiment, bosquet…) : polygones nommables, exclus des repères virtuels (les lignes s'arrêtent à leurs bords, les surfaces par bande ne les comptent pas) ; affichés en Terrain, sans servir au guidage.
+- Clôtures dessinées à la main, de deux types : **temporaires** (les seules proposées au guidage ; 280 m au plus, la longueur d'un kit : le tracé s'arrête de lui-même à 280 m et la pastille affiche la longueur restante ; couleur au choix avec le pinceau de la pastille) et **naturelles ou permanentes** (haies, clôtures fixes : couleur distincte, affichées en Terrain et dans la vue en perspective, jamais guidées) ; nommables, type modifiable ; accrochage aux sommets, aux bords des parcelles et obstacles et aux repères virtuels.
+- Repères virtuels, propres à chaque parcelle (réglages enregistrés avec elle, affichés seulement sur la parcelle sélectionnée), réglés dans un panneau latéral avec mise à jour en direct : lignes principales (par largeur en m ou par surface en ares, pour tout type de forme de champ ; direction réglable ou alignée sur le plus long côté ; côté de départ ; décalage ; périmètre en option) et lignes secondaires d'une autre direction (largeur en m ou surface de paddock, décalage). Les croisements servent de points d'accroche. Le panneau indique la taille des paddocks et la longueur de la clôture en L qui les ferme, et propose d'ajuster les espacements pour une L de 280 m (enrouleur Kiwitech). Option « L de 280 m maxi » : les lignes secondaires sont placées bande par bande pour qu'un seul kit de 280 m ferme deux côtés de chaque paddock, quitte à réduire les paddocks trop grands. Les repères ne servent qu'en Conception, pour accrocher les clôtures qu'on trace ou modifie ; ils ne sont ni affichés ni guidés en Terrain.
+- Surface de la parcelle sélectionnée et de chaque bande.
+- Noms des parcelles, obstacles et clôtures permanentes affichés sur la carte.
+- Plusieurs plans nommés, enregistrés automatiquement ; export / import GeoJSON : objets dessinés (avec type, nom, couleur, et pour chaque parcelle les réglages de ses repères dans `marks`) ; `fency.params` garde les derniers réglages utilisés (point de départ d'une nouvelle parcelle). Les exports des versions précédentes (un seul jeu de réglages) sont convertis à l'import.
+- Sur écran tactile : boutons au format du doigt, zoom par pincement ; pour déplacer un sommet ou un électrificateur, une goutte s'affiche sous le point : on la fait glisser et le point, au-dessus, reste visible ; la barre d'outils défile si elle dépasse la carte.
 - Stockage et authentification modulables (local par défaut, Firebase, autre hébergeur) pour le travail collaboratif : voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+- Électrificateurs (points, autant que nécessaire) : posés depuis le bloc Clôtures, ils s'accrochent aux clôtures ; nommables, déplaçables ; la pastille indique la clôture sur laquelle ils sont (ou à quelle distance).
+
 **Terrain (sur le quad)**
-- Choix d'une clôture (ou la plus proche automatiquement), puis guidage en deux étapes :
+- Choix d'une clôture dessinée (ou la plus proche automatiquement), puis guidage en deux étapes :
   1. **Rejoindre le départ** : flèche de direction et distance jusqu'à l'extrémité la plus proche (inversable).
   2. **Poser la clôture** : vue en perspective du sol devant le quad, avec la clôture et un quadrillage de 1 m gradué, l'écart à la ligne et la longueur restante.
 - Orientation par la boussole du téléphone (à plat, incliné sur un support, portrait ou paysage) ; à défaut, direction de déplacement donnée par le GPS.
 - Écran maintenu allumé, fonctionnement hors ligne pour les zones déjà affichées.
 - Mode « Simuler » (clic sur la carte) pour tester sans GPS.
+- Électrificateurs : affichés sur la carte et en perspective (poteaux jaunes) ; distance au plus proche ; « ⚡ Électrificateur ici » en pose un à la position GPS ; un appui sur l'un d'eux permet de le déplacer à sa position, de le renommer ou de le supprimer.
 
 ## Application Android avec correction RTK
 
@@ -65,7 +71,8 @@ Pour une précision de 2 à 5 cm sur le quad, associer un récepteur RTK Bluetoo
 
 - `src/geo.js` : projection locale, surfaces, longueurs
 - `src/generate.js` : découpage d'un champ en bandes
-- `src/guidance.js` : écart latéral, étapes du guidage, estimation de matériel
+- `src/guidance.js` : écart latéral, étapes du guidage
 - `src/compass.js` : cap du téléphone à partir des capteurs d'orientation
 - `src/perspective.js` : vue en perspective (projection, quadrillage, clôture)
+- `src/toolbar.js` : barre d'outils de la carte en blocs (Geoman reste le moteur de dessin)
 - `src/main.js` : carte et interface

@@ -11,13 +11,11 @@ body { display:flex; flex-direction:column; height:100dvh; overflow:hidden; }
 .panel { background:var(--bg); border-top:1px solid var(--line); max-height:46dvh; overflow-y:auto; z-index:1000; padding-bottom:env(safe-area-inset-bottom); }
 .panel.hidden { display:none; }
 .panel-body { padding:10px 14px 16px; }
-.handle { display:none; }
 h3 { margin:14px 0 6px; font-size:15px; color:var(--green); }
 h3:first-child { margin-top:0; }
 .hint { font-size:13px; color:var(--muted); margin:0 0 8px; }
 .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0; }
 .grid { display:grid; gap:8px; }
-.grid.two { grid-template-columns:1fr 1fr; }
 label { display:flex; flex-direction:column; gap:3px; font-size:13px; color:var(--muted); }
 label.check { flex-direction:row; align-items:center; gap:6px; color:var(--fg); font-size:14px; }
 input[type=number], select { font-size:16px; padding:8px; border:1px solid var(--line); border-radius:6px; background:#fff; color:var(--fg); min-width:0; }
@@ -57,7 +55,6 @@ button.danger { color:var(--warn); }
 .quad-icon { line-height:0; filter:drop-shadow(0 0 2px rgba(0,0,0,.5)); }
 #me-arrow { transition:transform .2s linear; }
 #me-arrow .me-dir { display:none; } #me-arrow.has-heading .me-dir { display:inline; } #me-arrow.has-heading .me-dot { display:none; }
-.post-label { background:#fff; border:1px solid #333; border-radius:3px; padding:0 4px; font-size:11px; }
 .leaflet-tooltip.strip-tip { font-size:12px; padding:2px 6px; }
 
 @media (min-width: 820px) {
@@ -67,6 +64,9 @@ button.danger { color:var(--warn); }
   #map { grid-column:1; grid-row:2; min-width:0; }
   .panel { grid-column:2; grid-row:2; max-height:none; border-top:0; border-left:1px solid var(--line); }
   #toast { bottom:20px; left:calc(50% - 190px); }
+  /* Conception : pas de panneau, la carte prend toute la largeur */
+  body.mode-design { grid-template-columns:minmax(0, 1fr); }
+  body.mode-design #toast { left:50%; }
 }
 
 /* Qualité de position (RTK natif Android) */
@@ -75,8 +75,6 @@ button.danger { color:var(--warn); }
 .rtk-status div { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
 /* Plans, comptes */
-.plan-head { justify-content:space-between; }
-.plan-head b { font-size:16px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .badge { font-size:12px; color:var(--muted); white-space:nowrap; }
 .badge.saved { color:var(--ok); } .badge.error { color:var(--warn); font-weight:600; }
 dialog { border:0; border-radius:12px; padding:16px; width:min(92vw, 440px); max-height:86dvh; overflow-y:auto; box-shadow:0 10px 40px rgba(0,0,0,.35); color:var(--fg); }
@@ -103,3 +101,111 @@ input[type=url], input[type=search], input[type=text] { font-size:16px; padding:
 .cat-item div { min-width:0; } .cat-item b, .cat-item small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .cat-item small { color:var(--muted); }
 .cat-item button { padding:6px 10px; font-size:14px; flex:none; }
+
+/* En-tête : nom du plan */
+#topbar .plan-head { flex:1; min-width:0; display:flex; align-items:baseline; gap:6px; }
+#topbar .plan-head b { font-size:14px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#topbar .badge { color:rgba(255,255,255,.75); }
+#topbar .badge.error { color:#ffcdd2; }
+
+/* Conception : la carte occupe tout l'écran */
+body.mode-design #toast { bottom:56px; }
+.map-info { position:fixed; left:50%; transform:translateX(-50%); bottom:calc(12px + env(safe-area-inset-bottom)); z-index:1000; background:rgba(255,255,255,.94); border-radius:16px; padding:5px 12px; font-size:13px; box-shadow:0 1px 5px rgba(0,0,0,.3); max-width:calc(100vw - 24px); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; pointer-events:none; }
+.map-info:empty, body.mode-field .map-info { display:none; }
+.map-info.renamable { pointer-events:auto; cursor:pointer; }
+.map-info .info-name { font-weight:600; }
+.map-info .info-name.empty { font-weight:400; color:var(--muted); font-style:italic; }
+
+/* Barre d'outils de la carte (src/toolbar.js), en blocs, dans le style de Geoman */
+.fency-toolbar { display:flex; flex-direction:column; gap:8px; overflow-y:auto; overflow-x:hidden; padding:6px 10px 6px 0; margin-top:4px !important; scrollbar-width:thin; }
+.fency-toolbar .fency-block { margin:0; border-left:4px solid var(--block-color, rgba(0,0,0,.2)); }
+.fency-toolbar .fency-block[hidden] { display:none; }
+.fency-toolbar .leaflet-buttons-control-button { position:relative; }
+.fency-toolbar .fency-icon { background:none; display:flex; align-items:center; justify-content:center; font-size:17px; line-height:1; color:#333; font-weight:600; }
+.fency-toolbar .button-container.disabled .leaflet-buttons-control-button { opacity:.4; cursor:default; }
+.fency-badge { position:absolute; top:-5px; right:-7px; min-width:16px; height:16px; padding:0 4px; border-radius:8px; background:#e040fb; color:#fff; font-size:11px; line-height:16px; text-align:center; font-weight:700; }
+.fency-badge:empty { display:none; }
+.fency-toolbar .button-container[hidden] { display:none; }
+/* coins arrondis des blocs, même quand des boutons sont masqués */
+.fency-toolbar .fency-block { border-radius:4px; overflow:visible; }
+.fency-toolbar .fency-block .leaflet-buttons-control-button { border-radius:0 !important; }
+.leaflet-container.tool-reference { cursor:copy; }
+
+/* Fenêtres de choix */
+.choice-list { display:grid; gap:6px; margin:8px 0; }
+button.choice { text-align:left; }
+button.choice.current { background:#eef5ee; border-color:var(--green2); font-weight:600; }
+#dlg-plan .grid button { width:100%; }
+
+/* Panneau latéral des repères (Conception) : en bas sur téléphone, à droite sur grand écran */
+.side-panel { background:var(--bg); border-top:1px solid var(--line); max-height:45dvh; overflow-y:auto; z-index:1000; padding-bottom:env(safe-area-inset-bottom); }
+.side-panel[hidden] { display:none; }
+.side-head { position:sticky; top:0; background:var(--bg); display:flex; justify-content:space-between; align-items:center; padding:8px 14px; border-bottom:1px solid var(--line); z-index:1; }
+.side-head b { color:var(--green); font-size:15px; }
+.side-head button { padding:4px 10px; }
+.side-body { padding:6px 14px 14px; }
+.side-body h3 { margin-top:16px; }
+.side-body h3 label.check { color:var(--green); font-size:15px; font-weight:600; }
+.grid[hidden], label[hidden] { display:none; }
+.ok-text { color:var(--ok); } .warn-text { color:#ef6c00; }
+@media (max-width: 819px) {
+  body.marks-open .map-info { display:none; }
+  body.marks-open #toast { bottom:calc(45dvh + 8px); }
+}
+@media (min-width: 820px) {
+  body.mode-design.marks-open { grid-template-columns:minmax(0, 1fr) 340px; }
+  .side-panel { grid-column:2; grid-row:2; max-height:none; border-top:0; border-left:1px solid var(--line); }
+  body.marks-open #toast, body.marks-open .map-info { left:calc(50% - 170px); }
+}
+
+/* Pinceau de la pastille et choix de couleur des clôtures temporaires */
+.map-info .info-brush { display:inline-block; padding:0 4px; border-radius:10px; border-bottom:4px solid var(--c); cursor:pointer; }
+.swatches { display:grid; grid-template-columns:repeat(5, 1fr); gap:8px; margin:10px 0; }
+.swatch { height:44px; border-radius:10px; background:var(--c); border:2px solid rgba(0,0,0,.25); font-size:12px; padding:0; color:#003; }
+.swatch.current { outline:3px solid var(--green2); outline-offset:2px; }
+
+/* Électrificateurs */
+.energizer-icon { display:flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:50%; background:#ffd600; border:2px solid #212121; font-size:17px; line-height:1; box-shadow:0 1px 4px rgba(0,0,0,.5); }
+.energizer-icon.sel { border-color:#2979ff; box-shadow:0 0 0 4px rgba(41,121,255,.6); }
+.energizer-row { flex-wrap:nowrap; }
+.energizer-row button { flex:none; }
+
+/* Noms sur la carte */
+.leaflet-tooltip.name-label { background:rgba(255,255,255,.85); border:0; box-shadow:0 1px 3px rgba(0,0,0,.35); border-radius:4px; padding:1px 6px; font-size:12px; font-weight:600; color:#1b1b1b; white-space:nowrap; }
+.leaflet-tooltip.name-label::before { display:none; }
+.leaflet-tooltip.name-obstacle { background:rgba(62,39,35,.85); color:#fff; }
+.leaflet-tooltip.name-permanent { color:#6a1b9a; }
+
+/* Écrans tactiles : boutons au format du doigt */
+@media (pointer: coarse) {
+  .fency-toolbar .leaflet-bar a.leaflet-buttons-control-button { width:42px; height:42px; line-height:42px; padding:8px; }
+  .fency-toolbar .fency-icon { font-size:21px; }
+  .fency-toolbar { gap:10px; }
+  .side-head button, .side-body button { min-height:40px; }
+}
+
+/* Pastille pendant un tracé : dernier point, terminer, annuler */
+.map-info.drawing { pointer-events:auto; white-space:nowrap; display:flex; align-items:center; gap:8px; padding:4px 6px 4px 12px; }
+.draw-actions { display:flex; gap:4px; }
+.draw-actions button { min-width:36px; height:32px; padding:0 8px; font-size:17px; line-height:1; border-radius:16px; }
+.draw-actions button[data-act="finish"] { background:var(--green2); color:#fff; border-color:var(--green2); }
+.draw-actions button:disabled { opacity:.35; }
+@media (pointer: coarse) { .draw-actions button { min-width:44px; height:40px; } }
+@media (max-width: 819px) {
+  /* panneau des repères ouvert : la pastille de tracé reste visible, au-dessus du panneau */
+  body.marks-open .map-info.drawing { display:flex; bottom:calc(45dvh + 8px); }
+  body.marks-open #toast { bottom:calc(45dvh + 60px); }
+}
+
+/* Longueur des côtés pendant le tracé d'une parcelle ou d'un obstacle */
+.edge-len { pointer-events:none; }
+.edge-len span { position:absolute; transform:translate(-50%,-50%) rotate(var(--a)); white-space:nowrap; background:rgba(33,33,33,.82); color:#fff; font-size:12px; font-weight:600; padding:2px 7px; border-radius:5px; pointer-events:none; }
+
+/* Goutte de déplacement (écran tactile) : on la fait glisser, le point suit au-dessus du doigt */
+.leaflet-marker-icon.drop-handle { background:none; border:0; }
+.drop-handle .drop { position:absolute; left:0; bottom:0; filter:drop-shadow(0 1px 3px rgba(0,0,0,.45)); }
+.drop-handle .drop path { fill:rgba(229,57,53,.72); stroke:#fff; stroke-width:1.5; }
+.drop-handle .drop path.arrows { fill:none; stroke:#fff; stroke-width:3; stroke-linecap:round; stroke-linejoin:round; }
+.drop-handle .drop-target { position:absolute; left:20px; top:4px; width:12px; height:12px; border-radius:50%; border:2px solid #fff; box-shadow:0 0 0 2px #e53935; }
+.drop-handle .energizer-icon { position:absolute; left:11px; top:0; }
+.leaflet-marker-icon.edge-mid { pointer-events:none; border-radius:50%; background:#fff; border:2px solid #212121; }

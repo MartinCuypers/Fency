@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeProjection, areaLL, lengthLL, longestEdgeBearing } from '../src/geo.js';
-import { generateStrips } from '../src/generate.js';
-import { prepareLine, locate, pointAt, estimateMaterial, toStart, bearingAt, nextPhase, nearerEndIsLast } from '../src/guidance.js';
+import { generateStrips, generateGrid, paddockOf, fitPaddock } from '../src/generate.js';
+import { prepareLine, locate, pointAt, toStart, bearingAt, nextPhase, nearerEndIsLast } from '../src/guidance.js';
 import { headingFromOrientation, angleDiff, smoothAngle } from '../src/compass.js';
-import { makeCamera, toCameraFrame } from '../src/perspective.js';
+import { makeCamera, toCameraFrame, segmentInRect } from '../src/perspective.js';
 
 // Rectangle 200 m (est-ouest) x 100 m (nord-sud) = 2 ha, près de Rennes
 const origin = [-1.68, 48.11];
@@ -41,6 +41,81 @@ test('champ non rectangulaire (triangle) : surfaces égales', () => {
   for (const s of g.strips) assert.ok(Math.abs(s.area - 2500) < 40, `aire ${s.area}`);
 });
 
+test('obstacle : clôture coupée autour, surface des bandes hors obstacle', () => {
+  const obstacle = [[80, 30], [120, 30], [120, 50], [80, 50], [80, 30]].map(p.toLL); // 40 m x 20 m = 800 m²
+  const g = generateStrips(rect, { bearing: 90, mode: 'width', value: 20, holes: [obstacle] });
+  assert.equal(g.lines.length, 5); // la clôture à 40 m est coupée en deux par l'obstacle
+  const split = g.lines.filter((l) => Math.abs(l.length - 80) < 0.5);
+  assert.equal(split.length, 2);
+  assert.ok(Math.abs(g.strips[1].area - 3600) < 40, `bande 2 : ${g.strips[1].area}`); // 20-40 m : 400 m² d'obstacle
+  assert.ok(Math.abs(g.strips[2].area - 3600) < 40, `bande 3 : ${g.strips[2].area}`); // 40-60 m : 400 m² d'obstacle
+  assert.ok(Math.abs(g.totalArea - 19200) < 40);
+});
+
+test('obstacle en mode surface : bandes de surface utile égale', () => {
+  const obstacle = [[80, 30], [120, 30], [120, 50], [80, 50], [80, 30]].map(p.toLL);
+  const g = generateStrips(rect, { bearing: 90, mode: 'area', value: 4800, holes: [obstacle] });
+  assert.equal(g.strips.length, 4);
+  for (const s of g.strips) assert.ok(Math.abs(s.area - 4800) < 60, `aire ${s.area}`);
+});
+
+test('obstacles qui se chevauchent ou dépassent du champ', () => {
+  const a = [[50, 10], [90, 10], [90, 30], [50, 30], [50, 10]].map(p.toLL);
+  const b = [[70, 15], [110, 15], [110, 25], [70, 25], [70, 15]].map(p.toLL); // chevauche a
+  const out = [[150, -20], [250, -20], [250, 30], [150, 30], [150, -20]].map(p.toLL); // dépasse du champ
+  const g = generateStrips(rect, { bearing: 90, mode: 'width', value: 20, holes: [a, b, out] });
+  const at20 = g.lines.filter((l) => l.strip === 1).map((l) => Math.round(l.length)).sort((x, y) => x - y);
+  assert.deepEqual(at20, [40, 50]); // 0-50 et 110-150 (a et b réunis : 50-110)
+});
+
+test('décalage des lignes (mode largeur)', () => {
+  const g = generateStrips(rect, { bearing: 90, mode: 'width', value: 20, offset: 5 });
+  const ys = g.lines.map((l) => Math.round(p.toXY(l.coords[0])[1]));
+  assert.deepEqual(ys, [5, 25, 45, 65, 85]);
+  const h = generateStrips(rect, { bearing: 90, mode: 'width', value: 20, offset: 45 }); // ramené à 5
+  assert.equal(h.lines.length, 5);
+});
+
+test('quadrillage : lignes secondaires et croisements insérés comme sommets', () => {
+  const g = generateGrid(rect, { primary: { bearing: 90, value: 25 }, secondary: { bearing: 0, value: 50 } });
+  assert.equal(g.lines.length, 3);      // y = 25, 50, 75
+  assert.equal(g.secondary.length, 3);  // x = 50, 100, 150
+  for (const l of g.lines) assert.equal(l.coords.length, 5); // 2 extrémités + 3 croisements
+  for (const l of g.secondary) assert.equal(l.coords.length, 5);
+  const [x, y] = p.toXY(g.lines[0].coords[1]);
+  assert.ok(Math.abs(x - 50) < 0.01 && Math.abs(y - 25) < 0.01);
+});
+
+test('lignes secondaires bande par bande : espacement propre à chaque bande', () => {
+  // bandes principales de 25 m ; secondaires de 50 m, sauf la 2e bande (pas de secondaire)
+  const g = generateGrid(rect, {
+    primary: { bearing: 90, value: 25 },
+    secondary: { bearing: 0, value: 50, spacingFor: (a) => (a > 24 ? 50 : null) },
+  });
+  assert.equal(g.paddocks.length, 4);
+  assert.equal(g.secondary.length, 12); // 3 lignes x 4 bandes
+  for (const l of g.secondary) assert.ok(Math.abs(l.length - 25) < 0.01);
+  // chaque ligne principale reçoit les extrémités des segments secondaires qui s'y arrêtent
+  for (const l of g.lines) assert.equal(l.coords.length, 5);
+  const none = generateGrid(rect, { primary: { bearing: 90, value: 25 }, secondary: { bearing: 0, value: 50, spacingFor: (a) => null } });
+  assert.equal(none.secondary.length, 0);
+});
+
+test('paddock et clôture en L de 280 m', () => {
+  assert.deepEqual(paddockOf(100, 180, 90), { area: 18000, lFence: 280 });
+  const { fit } = fitPaddock(18000, 90, { near: 90 });
+  assert.ok(Math.abs(fit.a - 100) < 1e-6 && Math.abs(fit.b - 180) < 1e-6);
+  const other = fitPaddock(18000, 90, { near: 170 }).fit; // l'autre solution
+  assert.ok(Math.abs(other.a - 180) < 1e-6);
+  const big = fitPaddock(20000, 90); // > 140 x 140 m
+  assert.equal(big.fit, null);
+  assert.equal(Math.round(big.maxArea), 19600);
+  // angle non droit : L = (a + b) / sin
+  const oblique = fitPaddock(10000, 60).fit;
+  assert.ok(Math.abs(paddockOf(oblique.a, oblique.b, 60).lFence - 280) < 1e-6);
+  assert.ok(Math.abs(paddockOf(oblique.a, oblique.b, 60).area - 10000) < 1e-6);
+});
+
 test('sens inverse : la première bande part de l\'autre côté', () => {
   const a = generateStrips(rect, { bearing: 90, value: 30 });
   const b = generateStrips(rect, { bearing: 90, value: 30, reverse: true });
@@ -62,8 +137,6 @@ test('pointAt et matériel', () => {
   assert.ok(Math.abs(line.length - 150) < 0.1);
   const q = p.toXY(pointAt(line, 125));
   assert.ok(Math.abs(q[0] - 100) < 0.1 && Math.abs(q[1] - 25) < 0.1);
-  const m = estimateMaterial([200, 200], { rows: 2 });
-  assert.deepEqual(m, { total: 400, wire: 800 });
 });
 
 test('guidage : rejoindre le départ (distance et cap), cap de la ligne', () => {
@@ -139,4 +212,11 @@ test('perspective : projection du sol', () => {
   near(toCameraFrame([10, 0], 90), [0, 10]);
   near(toCameraFrame([0, 10], 90), [-10, 0]);
   near(toCameraFrame([3, 4], 0), [3, 4]);
+});
+
+test('segment à l\'écran : traversant, extrémités hors champ, ou à côté', () => {
+  assert.ok(segmentInRect([-500, 150], [900, 160], 0, 100, 400, 300)); // vue en travers : extrémités hors champ
+  assert.ok(segmentInRect([10, 120], [20, 130], 0, 100, 400, 300));   // entièrement dedans
+  assert.ok(!segmentInRect([-500, 50], [900, 60], 0, 100, 400, 300)); // au-dessus (ciel)
+  assert.ok(!segmentInRect([500, 150], [900, 250], 0, 100, 400, 300)); // à droite
 });

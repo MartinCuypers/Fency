@@ -9,9 +9,10 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="icon-192.png" />
 </head>
-<body>
+<body class="mode-design">
   <header id="topbar">
     <strong>Fency</strong>
+    <span class="plan-head"><b id="plan-name">…</b><span id="plan-sync" class="badge"></span></span>
     <nav>
       <button id="tab-design" class="tab active">Conception</button>
       <button id="tab-field" class="tab">Terrain</button>
@@ -20,73 +21,8 @@
 
   <div id="map"></div>
 
-  <!-- Conception -->
-  <section id="panel-design" class="panel">
-    <div class="handle" id="design-handle"></div>
-    <div class="panel-body">
-      <h3>1. Parcelles</h3>
-      <div class="row">
-        <button id="btn-locate">📍 Ma position</button>
-        <select id="basemap" title="Fond de carte"></select>
-      </div>
-      <label>Couche de référence (cliquez un polygone pour en faire une parcelle)
-        <span class="row nowrap"><select id="ref-layer"></select><button id="btn-layers" title="Ajouter une couche du serveur">＋ Couches</button></span>
-      </label>
-      <div id="ref-status" class="hint"></div>
-      <p class="hint">Ou dessinez avec les outils à gauche de la carte : <b>polygone</b> pour une parcelle, <b>ligne</b> pour une clôture.</p>
-      <div class="row">
-        <label class="check"><input id="multi" type="checkbox" /> Sélection multiple</label>
-        <button id="btn-merge" disabled>Fusionner</button>
-        <button id="btn-cut">Couper</button>
-      </div>
-      <div id="field-info" class="info">Aucun champ dessiné.</div>
-
-      <h3>2. Générer les clôtures</h3>
-      <div class="grid">
-        <label>Découpage par
-          <select id="gen-mode">
-            <option value="width">largeur de bande (m)</option>
-            <option value="area">surface par bande (ares)</option>
-          </select>
-        </label>
-        <label><span id="gen-value-label">Largeur (m)</span>
-          <input id="gen-value" type="number" min="1" step="1" value="20" inputmode="decimal" />
-        </label>
-        <label>Direction des clôtures : <b id="gen-angle-val">90°</b>
-          <input id="gen-angle" type="range" min="0" max="179" step="1" value="90" />
-        </label>
-        <div class="row">
-          <button id="btn-align">Aligner sur le plus long côté</button>
-          <label class="check"><input id="gen-reverse" type="checkbox" /> Départ côté opposé</label>
-        </div>
-        <label class="check"><input id="gen-perimeter" type="checkbox" checked /> Clôturer aussi le périmètre</label>
-      </div>
-      <div class="row">
-        <button id="btn-generate" class="primary">Générer</button>
-        <button id="btn-clear-gen">Effacer le généré</button>
-      </div>
-      <div id="strip-list" class="info"></div>
-
-      <h3>3. Matériel (Kiwitech)</h3>
-      <label>Nombre de fils<input id="mat-rows" type="number" min="1" step="1" value="1" inputmode="numeric" /></label>
-      <div id="material" class="info"></div>
-
-      <h3>Plan</h3>
-      <div class="row plan-head"><b id="plan-name">…</b><span id="plan-sync" class="badge"></span></div>
-      <div class="row">
-        <button id="btn-plans">Mes plans…</button>
-        <button id="btn-share" hidden>Partager</button>
-        <button id="btn-account" hidden>Se connecter</button>
-      </div>
-      <div class="row">
-        <button id="btn-export">Exporter</button>
-        <button id="btn-import">Importer</button>
-        <button id="btn-reset" class="danger">Tout effacer</button>
-      </div>
-      <p id="plan-backend" class="hint"></p>
-      <input id="file-import" type="file" accept=".geojson,.json,application/geo+json" hidden />
-    </div>
-  </section>
+  <!-- Conception : barre d'outils sur la carte (src/toolbar.js) ; infos du champ sélectionné -->
+  <div id="field-info" class="map-info"></div>
 
   <!-- Terrain / guidage -->
   <section id="panel-field" class="panel hidden">
@@ -101,6 +37,10 @@
         <button id="btn-rtk" hidden>⚙ RTK</button>
       </div>
       <div id="rtk-status" class="info rtk-status"></div>
+      <div class="row energizer-row">
+        <button id="btn-energizer-here">⚡ Électrificateur ici</button>
+        <span id="energizer-near" class="hint"></span>
+      </div>
       <div id="guide" class="guide">
         <div class="row guide-head">
           <b id="guide-step">Démarrez le GPS</b>
@@ -131,6 +71,107 @@
       </div>
     </div>
   </section>
+
+  <!-- Conception : réglages des repères virtuels, à côté de la carte (mise à jour en direct) -->
+  <aside id="panel-marks" class="side-panel" hidden>
+    <div class="side-head"><b>Repères virtuels</b><button id="btn-marks-close" title="Fermer">✕</button></div>
+    <div class="side-body">
+      <p id="marks-field" class="hint"></p>
+      <div id="grid-info" class="info"></div>
+      <h3>Lignes principales</h3>
+      <div class="grid">
+        <label>Espacement
+          <select id="gen-mode">
+            <option value="width">largeur de bande (m)</option>
+            <option value="area">surface par bande (ares)</option>
+          </select>
+        </label>
+        <label><span id="gen-value-label">Largeur (m)</span>
+          <input id="gen-value" type="number" min="1" step="any" value="20" inputmode="decimal" />
+        </label>
+        <label>Direction : <b id="gen-angle-val">90°</b>
+          <input id="gen-angle" type="range" min="0" max="179" step="1" value="90" />
+        </label>
+        <div class="row">
+          <button id="btn-align">Aligner sur le plus long côté</button>
+          <label class="check"><input id="gen-reverse" type="checkbox" /> Départ côté opposé</label>
+        </div>
+        <label id="gen-offset-box">Décalage : <b id="gen-offset-val">0 m</b>
+          <input id="gen-offset" type="range" min="0" max="20" step="0.5" value="0" />
+        </label>
+        <label class="check"><input id="gen-perimeter" type="checkbox" checked /> Inclure le périmètre</label>
+      </div>
+
+      <h3><label class="check"><input id="sec-on" type="checkbox" /> Lignes secondaires</label></h3>
+      <div id="sec-box" class="grid" hidden>
+        <label>Espacement
+          <select id="sec-mode">
+            <option value="width">largeur (m)</option>
+            <option value="paddock">surface de paddock (ares)</option>
+          </select>
+        </label>
+        <label><span id="sec-value-label">Largeur (m)</span>
+          <input id="sec-value" type="number" min="1" step="any" value="100" inputmode="decimal" />
+        </label>
+        <label>Direction : <b id="sec-angle-val">0°</b>
+          <input id="sec-angle" type="range" min="0" max="179" step="1" value="0" />
+        </label>
+        <label class="check"><input id="sec-cap" type="checkbox" /> L de 280 m maxi (un kit ferme 2 côtés de chaque paddock)</label>
+        <div class="row"><button id="btn-sec-perp">Perpendiculaire aux principales</button></div>
+        <label>Décalage : <b id="sec-offset-val">0 m</b>
+          <input id="sec-offset" type="range" min="0" max="100" step="0.5" value="0" />
+        </label>
+      </div>
+
+      <div id="strip-list" class="info"></div>
+    </div>
+  </aside>
+
+  <dialog id="dlg-energizer">
+    <h3 id="energizer-title">⚡ Électrificateur</h3>
+    <p id="energizer-where" class="hint"></p>
+    <div class="grid">
+      <button id="btn-energizer-move">Déplacer à ma position</button>
+      <button id="btn-energizer-rename">Renommer</button>
+      <button id="btn-energizer-delete" class="danger">Supprimer</button>
+    </div>
+    <div class="row"><button data-close>Fermer</button></div>
+  </dialog>
+
+  <dialog id="dlg-color">
+    <h3>Couleur de la clôture</h3>
+    <div id="color-list" class="swatches"></div>
+    <div class="row"><button data-close>Fermer</button></div>
+  </dialog>
+
+  <dialog id="dlg-basemap">
+    <h3>Fond de carte</h3>
+    <div id="basemap-list" class="choice-list"></div>
+    <div class="row"><button data-close>Fermer</button></div>
+  </dialog>
+
+  <dialog id="dlg-reference">
+    <h3>Couche de référence</h3>
+    <p class="hint">Choisissez la couche, puis « Créer des parcelles » : chaque polygone cliqué sur la carte devient une parcelle. Recliquez le bouton ▦ pour terminer.</p>
+    <span class="row nowrap"><select id="ref-layer"></select><button id="btn-layers" title="Ajouter une couche du serveur">＋ Couches</button></span>
+    <div id="ref-status" class="hint"></div>
+    <div class="row"><button id="btn-ref-use" class="primary">Créer des parcelles</button><button data-close>Fermer</button></div>
+  </dialog>
+
+  <dialog id="dlg-plan">
+    <h3>Plan</h3>
+    <div class="grid">
+      <button id="btn-plans">Mes plans…</button>
+      <button id="btn-share" hidden>Partager</button>
+      <button id="btn-account" hidden>Se connecter</button>
+      <button id="btn-export">Exporter (GeoJSON)</button>
+      <button id="btn-import">Importer (GeoJSON)</button>
+      <button id="btn-reset" class="danger">Tout effacer</button>
+    </div>
+    <p id="plan-backend" class="hint"></p>
+    <input id="file-import" type="file" accept=".geojson,.json,application/geo+json" hidden />
+    <div class="row"><button data-close>Fermer</button></div>
+  </dialog>
 
   <dialog id="dlg-plans">
     <h3>Mes plans</h3>

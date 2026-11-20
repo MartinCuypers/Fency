@@ -52,6 +52,18 @@ const COLORS = { ok: '#43a047', warn: '#fb8c00', bad: '#e53935' };
  * @param {'ok'|'warn'|'bad'} scene.level
  * @returns {boolean} vrai si une partie de la clôture est visible à l'écran
  */
+/** Le segment [a, b] coupe-t-il le rectangle [x0, x1] × [y0, y1] ? (découpage de Liang-Barsky) */
+export function segmentInRect(a, b, x0, y0, x1, y1) {
+  let t0 = 0, t1 = 1;
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  for (const [p, q] of [[-dx, a[0] - x0], [dx, x1 - a[0]], [-dy, a[1] - y0], [dy, y1 - a[1]]]) {
+    if (p === 0) { if (q < 0) return false; continue; }
+    const r = q / p;
+    if (p < 0) { if (r > t1) return false; if (r > t0) t0 = r; } else { if (r < t0) return false; if (r < t1) t1 = r; }
+  }
+  return t0 <= t1;
+}
+
 export function drawScene(ctx, cam, scene) {
   const { width: w, height: h, horizonY } = cam;
   // ciel et sol
@@ -94,6 +106,17 @@ export function drawScene(ctx, cam, scene) {
     }
   }
 
+  // repères au sol (clôtures permanentes, contours d'obstacles) : visibles, mais pas la ligne à suivre
+  for (const o of scene.others ?? []) {
+    ctx.beginPath();
+    const pts = o.closed ? [...o.pts, o.pts[0]] : o.pts;
+    for (let i = 0; i + 1 < pts.length; i++) seg([...pts[i], 0], [...pts[i + 1], 0]);
+    ctx.setLineDash(o.dash ?? []);
+    ctx.strokeStyle = 'rgba(0,0,0,0.45)'; ctx.lineWidth = 6; ctx.lineCap = 'round'; ctx.stroke();
+    ctx.strokeStyle = o.color; ctx.lineWidth = 3; ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
   // clôture : trait épais, bordé de sombre pour rester lisible au soleil
   let visible = false;
   for (const [color, width] of [['rgba(0,0,0,0.55)', 9], [COLORS[scene.level] ?? COLORS.bad, 5]]) {
@@ -102,8 +125,9 @@ export function drawScene(ctx, cam, scene) {
       const s = cam.clip([...scene.fence[i], 0], [...scene.fence[i + 1], 0]);
       if (!s) continue;
       ctx.moveTo(s[0][0], s[0][1]); ctx.lineTo(s[1][0], s[1][1]);
-      const on = (p) => p[0] > -w && p[0] < 2 * w && p[1] > 0 && p[1] < h;
-      if ((on(s[0]) || on(s[1])) && Math.max(s[0][1], s[1][1]) > horizonY + 2) visible = true;
+      // visible si le segment traverse la zone de sol à l'écran (ses extrémités peuvent être hors champ,
+      // par exemple quand on regarde la clôture en travers)
+      if (segmentInRect(s[0], s[1], 0, horizonY + 2, w, h)) visible = true;
     }
     ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.stroke();
   }
@@ -117,6 +141,21 @@ export function drawScene(ctx, cam, scene) {
     ctx.beginPath(); ctx.arc(s[1][0], s[1][1], 6, 0, 2 * Math.PI); ctx.fillStyle = color; ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
   };
   pole(scene.fence[0], '#2e7d32'); pole(scene.fence.at(-1), '#c62828');
+  // électrificateurs : poteaux jaunes marqués d'un éclair
+  for (const pt of scene.energizers ?? []) {
+    const s = cam.clip([...pt, 0], [...pt, 1.4]);
+    if (!s) continue;
+    ctx.beginPath(); ctx.moveTo(s[0][0], s[0][1]); ctx.lineTo(s[1][0], s[1][1]);
+    ctx.strokeStyle = '#212121'; ctx.lineWidth = 6; ctx.stroke();
+    ctx.strokeStyle = '#ffd600'; ctx.lineWidth = 3; ctx.stroke();
+    const r = Math.max(8, Math.min(16, (s[0][1] - s[1][1]) / 3));
+    ctx.beginPath(); ctx.arc(s[1][0], s[1][1], r, 0, 2 * Math.PI); ctx.fillStyle = '#ffd600'; ctx.fill(); ctx.strokeStyle = '#212121'; ctx.lineWidth = 2; ctx.stroke();
+    // éclair noir, dessiné (un émoji resterait jaune sur jaune)
+    const [cx, cy] = s[1], k = r / 10;
+    ctx.beginPath();
+    [[2, -8], [-4, 1], [0, 1], [-2, 8], [4, -1], [0, -1]].forEach(([x, y], i) => (i ? ctx.lineTo(cx + x * k, cy + y * k) : ctx.moveTo(cx + x * k, cy + y * k)));
+    ctx.closePath(); ctx.fillStyle = '#212121'; ctx.fill();
+  }
 
   // le quad : flèche au sol, toujours orientée vers l'avant
   const tri = [[0, 1.1], [-0.55, -0.6], [0, -0.25], [0.55, -0.6]].map((p) => cam.project([...p, 0]));
